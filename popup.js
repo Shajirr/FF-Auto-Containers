@@ -1,0 +1,445 @@
+const DEBUG = true; // Toggle for debug logging
+
+function logDebug(...args) {
+  if (DEBUG) console.log(...args);
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  // Get current tab info
+  const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+  const currentTab = tabs[0];
+  
+  if (!currentTab || !currentTab.url || currentTab.url.startsWith('about:') || currentTab.url.startsWith('moz-extension:')) {
+    document.getElementById('currentUrl').textContent = 'Cannot add rules for this page';
+    document.querySelector('.pattern-input').style.display = 'none';
+    document.querySelector('.quick-suggestions').style.display = 'none';
+    document.querySelector('.container-input').style.display = 'none';
+    document.querySelector('.buttons').style.display = 'none';
+    return;
+  }
+  
+  // Extract domain and path info
+  const url = new URL(currentTab.url);
+  const domain = url.hostname.replace(/^www\./, '');
+  const path = url.pathname;
+  const hasUsefulPath = path && path !== '/' && path.split('/').length <= 3; // Only suggest paths that aren't too deep
+  
+  // Check if this is a subdomain (more than 2 parts after removing www)
+  const domainParts = domain.split('.');
+  const hasSubdomain = domainParts.length > 2;
+  
+  // Update UI with current tab info
+  document.getElementById('currentUrl').textContent = currentTab.url;
+  document.getElementById('currentDomain').textContent = `Domain: ${domain}`;
+  
+  // Get container info
+  let containerInfo = 'Default Container';
+  if (currentTab.cookieStoreId && currentTab.cookieStoreId !== 'firefox-default') {
+    try {
+      const container = await browser.contextualIdentities.get(currentTab.cookieStoreId);
+      const isTemp = /^tmp_\d+$/.test(container.name);
+      containerInfo = `Container: ${container.name}${isTemp ? ' (temporary)' : ''}`;
+    } catch (e) {
+      containerInfo = 'Unknown Container';
+    }
+  }
+  document.getElementById('currentContainer').textContent = containerInfo;
+  
+  // Get pattern input and suggestion buttons
+  const patternInput = document.getElementById('patternName');
+  const domainSugg = document.getElementById('domainSugg');
+  const pathSugg = document.getElementById('pathSugg');
+  const wildcardSugg = document.getElementById('wildcardSugg');
+  
+  // Set up intelligent suggestions
+  let suggestions = [];
+  
+  // Always suggest exact domain
+  suggestions.push({ 
+    element: domainSugg, 
+    pattern: domain, 
+    text: domain 
+  });
+  
+  // Suggest path only if it's useful (not too specific)
+  if (hasUsefulPath) {
+    suggestions.push({ 
+      element: pathSugg, 
+      pattern: `${domain}${path}`, 
+      text: `${domain}${path}` 
+    });
+  } else {
+    pathSugg.style.display = 'none';
+  }
+  
+  // Suggest wildcard pattern intelligently
+  if (hasSubdomain) {
+    // For subdomains like mail.google.com, suggest *.google.com
+    const baseDomain = domainParts.slice(-2).join('.');
+    suggestions.push({ 
+      element: wildcardSugg, 
+      pattern: `*.${baseDomain}`, 
+      text: `*.${baseDomain}` 
+    });
+  } else {
+    // For main domains like google.com, suggest google.*
+    const baseName = domainParts[0];
+    suggestions.push({ 
+      element: wildcardSugg, 
+      pattern: `${baseName}.*`, 
+      text: `${baseName}.*` 
+    });
+  }
+  
+  // Set button texts and click handlers
+  suggestions.forEach(({ element, pattern, text }) => {
+    element.textContent = text;
+    element.addEventListener('click', () => {
+      patternInput.value = pattern;
+      patternInput.focus();
+    });
+  });
+  
+  // Set default pattern to domain
+  patternInput.value = domain;
+  
+  // Load existing containers
+  const existingContainers = document.getElementById('existingContainers');
+  const containerNameInput = document.getElementById('containerName');
+  
+  let currentTabContainer = null;
+  try {
+    const identities = await browser.contextualIdentities.query({});
+    const permanentContainers = identities.filter(identity => !/^tmp_\d+$/.test(identity.name));
+    
+    permanentContainers.forEach(container => {
+      const option = document.createElement('option');
+      option.value = container.name;
+      option.textContent = container.name;
+      existingContainers.appendChild(option);
+    });
+    // Get current tab's container for related rules
+    if (currentTab.cookieStoreId && currentTab.cookieStoreId !== 'firefox-default') {
+      currentTabContainer = await browser.contextualIdentities.get(currentTab.cookieStoreId).catch(() => null);
+    }
+  } catch (e) {
+    console.error('Failed to load containers:', e);
+  }
+  
+  // Load and display related rules
+  await loadRelatedRules(currentTabContainer);
+  // Handle container selection
+  existingContainers.addEventListener('change', (e) => {
+    if (e.target.value) {
+      containerNameInput.value = e.target.value;
+      containerNameInput.disabled = true;
+    } else {
+      containerNameInput.value = '';
+      containerNameInput.disabled = false;
+      containerNameInput.focus();
+    }
+  });
+  
+	// Handle save rule
+	document.getElementById('saveRule').addEventListener('click', async () => {
+	  const pattern = patternInput.value.trim();
+	  const containerName = containerNameInput.value.trim();
+
+	  logDebug('Save rule clicked:', { pattern, containerName });
+
+	  if (!pattern) {
+		showMessage('Please enter a pattern', 'error');
+		return;
+	  }
+
+	  if (!containerName) {
+		showMessage('Please enter a container name', 'error');
+		return;
+	  }
+
+	  // Validate pattern - allow domains with wildcards, hyphens, underscores, and paths
+	  const isDomainPattern = /^(\*\.)?([a-zA-Z0-9_-]+\.)*([a-zA-Z0-9_*-]+)(\.[a-zA-Z0-9_-]+)*(\.\*)?(\/.*)?$/.test(pattern) || // e.g., google.com, *.google.*, google.*, *.google.com, google.com/search
+						  pattern.includes('/'); // e.g., google.com/search, google.com/?olud
+
+	  if (!isDomainPattern) {
+		showMessage('Pattern must be a valid domain (e.g., google.com, *.google.*, google.*, *.google.com) or URL path (e.g., google.com/search)', 'error');
+		return;
+	  }
+
+	  // Validate container name
+	  if (!/^[a-zA-Z0-9\s_-]+$/.test(containerName)) {
+		showMessage('Container name can only contain letters, numbers, spaces, hyphens, or underscores', 'error');
+		return;
+	  }
+
+	  try {
+		// Load existing rules
+		const { rules = '' } = await browser.storage.local.get('rules');
+		logDebug('Current rules before adding:', rules);
+		const existingRules = rules.split('\n').filter(line => line.trim() !== '');
+		logDebug('Existing rules array:', existingRules);
+
+		// Check if rule already exists
+		const newRule = `${pattern}, ${containerName}`;
+		logDebug('New rule to add:', newRule);
+		const ruleExists = existingRules.some(rule => {
+		  const [existingPattern] = rule.split(',').map(part => part.trim());
+		  return existingPattern === pattern;
+		});
+
+		if (ruleExists) {
+		  showMessage('A rule for this pattern already exists', 'error');
+		  return;
+		}
+
+		// Add new rule
+		existingRules.push(newRule);
+		const updatedRules = existingRules.join('\n');
+		logDebug('Updated rules before saving:', updatedRules);
+
+		// Save rules
+		await browser.storage.local.set({ rules: updatedRules });
+		logDebug('Rules saved to storage');
+
+		// Verify the save worked
+		const { rules: savedRules } = await browser.storage.local.get('rules');
+		logDebug('Rules after saving:', savedRules);
+
+		showMessage('Rule added successfully!', 'success');
+
+		// Sort rules for optimal lookup performance
+		try {
+		  logDebug('Sending sortRules message');
+		  const response = await browser.runtime.sendMessage({ action: 'sortRules' });
+		  logDebug('sortRules response:', response);
+		  if (!response || !response.success) {
+			console.warn('Rule sorting failed:', response?.error);
+		  }
+
+		  // Verify rules after sorting
+		  const { rules: finalRules } = await browser.storage.local.get('rules');
+		  logDebug('Final rules after sorting:', finalRules);
+		} catch (sortError) {
+		  console.warn('Rule sorting error:', sortError);
+		}
+
+		// Clear form
+		patternInput.value = domain; // Reset to default
+		containerNameInput.value = '';
+		existingContainers.selectedIndex = 0;
+		containerNameInput.disabled = false;
+
+		// Close popup after delay
+		setTimeout(() => {
+		  window.close();
+		}, 1500);
+	  } catch (error) {
+		console.error('Failed to save rule:', error);
+		showMessage('Failed to save rule', 'error');
+	  }
+	});
+  
+  // Handle open options
+  document.getElementById('openOptions').addEventListener('click', () => {
+    browser.runtime.openOptionsPage();
+    window.close();
+  });
+  
+  // Handle save edits
+  document.getElementById('saveEdits').addEventListener('click', async () => {
+    await saveRuleEdits();
+  });
+  
+  async function loadRelatedRules(currentContainer) {
+    const relatedRulesSection = document.getElementById('relatedRulesSection');
+    const relatedRulesList = document.getElementById('relatedRulesList');
+    
+    if (!currentContainer || /^tmp_\d+$/.test(currentContainer.name)) {
+      relatedRulesSection.style.display = 'none';
+      return;
+    }
+    
+    try {
+      const { rules = '' } = await browser.storage.local.get('rules');
+      const ruleLines = rules.split('\n').filter(line => line.trim() !== '');
+      
+      // Find rules that use the same container
+      const relatedRules = ruleLines.filter(line => {
+        const [, containerName] = line.split(',').map(part => part.trim());
+        return containerName === currentContainer.name;
+      });
+      
+      if (relatedRules.length === 0) {
+        relatedRulesList.innerHTML = '<div class="no-rules">No rules for this container</div>';
+        return;
+      }
+      
+      // Create editable rule items
+      relatedRulesList.innerHTML = '';
+      relatedRules.forEach((rule, index) => {
+        const ruleItem = document.createElement('div');
+        ruleItem.className = 'rule-item';
+        
+        // Create input element
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = rule.trim();
+        input.setAttribute('data-original', rule.trim());
+        input.setAttribute('data-index', index.toString());
+        
+        // Create delete button
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'delete-btn';
+        deleteBtn.setAttribute('data-rule', rule.trim());
+        deleteBtn.setAttribute('title', 'Delete rule');
+        deleteBtn.textContent = '×';
+        
+        // Append elements
+        ruleItem.appendChild(input);
+        ruleItem.appendChild(deleteBtn);
+        relatedRulesList.appendChild(ruleItem);
+      });
+      
+      // Add delete button handlers
+      relatedRulesList.addEventListener('click', async (e) => {
+        if (e.target.classList.contains('delete-btn')) {
+          const ruleToDelete = e.target.dataset.rule;
+          await deleteRule(ruleToDelete);
+          await loadRelatedRules(currentContainer); // Reload the list
+        }
+      });
+      
+    } catch (e) {
+      console.error('Failed to load related rules:', e);
+      relatedRulesList.innerHTML = '<div class="no-rules">Error loading rules</div>';
+    }
+  }
+  
+  async function deleteRule(ruleToDelete) {
+    try {
+      const { rules = '' } = await browser.storage.local.get('rules');
+      const ruleLines = rules.split('\n').filter(line => line.trim() !== '');
+      
+      // Remove the rule
+      const updatedRules = ruleLines.filter(line => line.trim() !== ruleToDelete).join('\n');
+      
+      // Save updated rules
+      await browser.storage.local.set({ rules: updatedRules });
+      
+      showMessage('Rule deleted successfully!', 'success');
+    } catch (error) {
+      console.error('Failed to delete rule:', error);
+      showMessage('Failed to delete rule', 'error');
+    }
+  }
+  
+  async function saveRuleEdits() {
+    const ruleInputs = document.querySelectorAll('.rule-item input');
+    const newRules = [];
+    let hasError = false;
+    
+    // Clear previous errors
+    ruleInputs.forEach(input => {
+      input.classList.remove('error');
+    });
+    
+    // Validate all rules
+    ruleInputs.forEach((input, index) => {
+      const ruleText = input.value.trim();
+      
+      if (!ruleText) {
+        input.classList.add('error');
+        hasError = true;
+        return;
+      }
+      
+      // Check basic format
+      if (!ruleText.includes(',') || ruleText.split(',').length !== 2) {
+        input.classList.add('error');
+        hasError = true;
+        return;
+      }
+      
+      // Check comma format
+      if (!/^[^,\s]+,\s+[^,\s]+$/.test(ruleText)) {
+        input.classList.add('error');
+        hasError = true;
+        return;
+      }
+      
+      const [pattern, containerName] = ruleText.split(',').map(part => part.trim());
+      
+      // Validate pattern
+      const isDomainPattern = /^(\*\.)?([a-zA-Z0-9_-]+\.)*([a-zA-Z0-9_*-]+)(\.[a-zA-Z0-9_-]+)*(\.\*)?(\/.*)?$/.test(pattern) || pattern.includes('/');
+      
+      if (!isDomainPattern) {
+        input.classList.add('error');
+        hasError = true;
+        return;
+      }
+      
+      // Validate container name
+      if (!/^[a-zA-Z0-9\s_-]+$/.test(containerName)) {
+        input.classList.add('error');
+        hasError = true;
+        return;
+      }
+      
+      newRules.push(ruleText);
+    });
+    
+    if (hasError) {
+      showMessage('Please fix the highlighted errors', 'error');
+      return;
+    }
+    
+    try {
+      // Load all existing rules
+      const { rules = '' } = await browser.storage.local.get('rules');
+      const allRuleLines = rules.split('\n').filter(line => line.trim() !== '');
+      
+      // Get original rules that were being edited
+      const originalRules = Array.from(ruleInputs).map(input => input.dataset.original);
+      
+      // Remove original rules and add new ones
+      const otherRules = allRuleLines.filter(rule => !originalRules.includes(rule.trim()));
+      const updatedAllRules = [...otherRules, ...newRules].join('\n');
+      
+      // Save updated rules
+      await browser.storage.local.set({ rules: updatedAllRules });
+	  
+	  // Sort rules for optimal lookup performance
+		try {
+		  const response = await browser.runtime.sendMessage({ action: 'sortRules' });
+		  if (!response || !response.success) {
+			console.warn('Rule sorting failed:', response?.error);
+		  }
+		} catch (sortError) {
+		  console.warn('Rule sorting error:', sortError);
+		}
+      
+      showMessage('Rules updated successfully!', 'success');
+      
+      // Reload the related rules section
+      const currentContainer = currentTab.cookieStoreId && currentTab.cookieStoreId !== 'firefox-default' 
+        ? await browser.contextualIdentities.get(currentTab.cookieStoreId).catch(() => null) 
+        : null;
+      await loadRelatedRules(currentContainer);
+      
+    } catch (error) {
+      console.error('Failed to save rule edits:', error);
+      showMessage('Failed to save rules', 'error');
+    }
+  }
+  function showMessage(text, type) {
+    const messageEl = document.getElementById('statusMessage');
+    messageEl.textContent = text;
+    messageEl.className = `status-message ${type}`;
+    messageEl.classList.remove('hidden');
+    
+    setTimeout(() => {
+      messageEl.classList.add('hidden');
+    }, 3000);
+  }
+});

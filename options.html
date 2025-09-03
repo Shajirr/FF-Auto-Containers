@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Temporary Containers Options</title>
+  <link rel="stylesheet" href="chrome://global/skin/in-content/common.css">
+  <style>
+    body {
+      margin: 20px;
+      font-family: -moz-system, system-ui, sans-serif;
+    }
+    h3 {
+      font-size: 1.2em;
+      margin-bottom: 0.5em;
+    }
+    p {
+      line-height: 1.4;
+      margin-bottom: 0.5em;
+    }
+    textarea {
+      width: 100%;
+      height: 150px;
+      font-family: monospace;
+      padding: 5px;
+      box-sizing: border-box;
+      margin-bottom: 1em;
+    }
+    .save-message {
+      display: inline-block;
+      margin-left: 10px;
+      opacity: 0;
+      transition: opacity 0.5s ease-in-out;
+    }
+    .save-message.visible {
+      opacity: 1;
+    }
+  </style>
+  <script src="options.js" defer></script>
+</head>
+<body>
+  <h3>Container Counts</h3>
+  <p>
+    Total Containers: <span id="totalContainers">0</span><br>
+    Permanent Containers: <span id="permanentContainers">0</span><br>
+    Temporary Containers: <span id="temporaryContainers">0</span>
+  </p>
+  <h3>Container Rules</h3>
+  <p>
+  Enter rules to assign domains or URL patterns to specific permanent containers.<br>
+  Format: 
+  <code>Pattern, Container name</code> (one per line).<br>
+  One rule per line. '*' wildcards are supported, matching any number of any characters
+  <br>
+  <br>
+  <strong>URL pattern examples:</strong><br>
+  <code>google.com, GL</code> - matches all Google URLs, except for subdomains<br>
+  <code>google.*, GL</code> - matches google.com, goole.co.uk, google.fr, etc.<br>
+  <code>google.com/search, GoogleSearch</code> - matches Google Search pages only<br>
+  <code>google.*/search, Search</code> - matches Google Search on any top-level domain<br>
+  <code>mail.google.com, Gmail</code> - matches Gmail subdomain specifically, will not match google.com<br>
+  <code>*.google.com, GL</code> - matches Google subdomains like mail.google.com or docs.google.com, will not match google.com<br>
+  <code>*.google.*, GL</code> - matches all Google subdomains with any top-level domains, like docs.google.com or mail.google.co.uk<br>
+  <br>
+  <strong>Rule priority:</strong> More specific patterns are checked first.
+  </p>
+	<textarea
+	  id="containerRules"
+	  placeholder="Enter rules, one per line, like:
+youtube.com, YT
+google.com, GL"
+	></textarea>
+  <p>
+    <input type="checkbox" id="showNotifications">
+    Show notifications
+  </p>
+  <button id="saveButton">Save</button>
+  <span id="save-message" class="save-message">Settings saved!</span>
+</body>
+</html>

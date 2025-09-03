@@ -1,0 +1,39 @@
+{
+  "manifest_version": 2,
+  "name": "Auto Containers",
+  "version": "2025.9.3",
+  "description": "Automatically opens tabs in either temporary or permanent containers for domain isolation.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "@auto-containers.shajirr"
+    }
+  },
+  "permissions": [
+    "contextualIdentities",
+    "cookies",
+    "tabs",
+    "storage",
+    "notifications",
+    "webNavigation",
+    "activeTab"
+  ],
+  "background": {
+    "scripts": ["background.js","sorting.js"],
+	"type": "module"
+  },
+  "browser_action": {
+    "default_title": "Auto Containers",
+    "default_popup": "popup.html",
+    "default_icon": "icon.svg"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "browser_style": false
+  },
+  "icons": {
+	"24": "icon.svg",
+    "32": "icon.svg",
+	"48": "icon.svg",
+	"64": "icon.svg"
+  }
+}
