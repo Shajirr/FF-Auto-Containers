@@ -18,6 +18,9 @@ const tabUrls = new Map();
 let lastActiveTabId = null;
 // Set to track tabs created by the addon
 const addonCreatedTabs = new Set();
+// Set to track tabs excluded from domain isolation
+const excludedTabs = new Set();
+
 
 // Safeguard: Track processing operations to prevent infinite loops
 const MAX_PROCESSING_PER_TAB = 3;
@@ -70,6 +73,20 @@ async function getNextContainerNumber() {
     nextNum++;
   }
   return nextNum;
+}
+
+// Function to update badge for excluded tabs
+async function updateTabBadge(tabId, isExcluded) {
+  try {
+    if (isExcluded) {
+      await browser.browserAction.setBadgeText({ text: "EX", tabId: tabId });
+      await browser.browserAction.setBadgeBackgroundColor({ color: "#ff6b35", tabId: tabId });
+    } else {
+      await browser.browserAction.setBadgeText({ text: "", tabId: tabId });
+    }
+  } catch (error) {
+    console.error('Error updating badge for tab', tabId, error);
+  }
 }
 
 // Function to check rules for permanent container
@@ -370,9 +387,18 @@ browser.tabs.onActivated.addListener(async (activeInfo) => {
     const container = tab.cookieStoreId ? await browser.contextualIdentities.get(tab.cookieStoreId).catch(() => null) : null;
     const containerName = container ? container.name : 'default';
     logDebug(`Active tab updated: ${activeInfo.tabId}, URL: ${tab.url}, container: ${containerName} (${tab.cookieStoreId || 'firefox-default'})`);
+	
+	// Update badge for the activated tab
+	await updateTabBadge(activeInfo.tabId, excludedTabs.has(activeInfo.tabId));
     
     // Check if the activated tab needs to be moved to a container
     if (tab.url && tab.url !== 'about:blank' && tab.url !== 'about:newtab') {
+	  // Skip if tab is excluded from domain isolation
+      if (excludedTabs.has(tab.id)) {
+        logDebug(`Tab ${tab.id} is excluded from domain isolation, skipping container check on activation`);
+        return;
+      }
+	  
       const domain = getDomain(tab.url);
       
       // If tab has a domain but is in default container, move it to appropriate container
@@ -520,6 +546,12 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   const filteredChangeInfo = { ...changeInfo };
   delete filteredChangeInfo.favIconUrl;
   logDebug(`onUpdated triggered - tabId: ${tabId}, index: ${tab.index}, url: ${tab.url}, changeInfo:`, filteredChangeInfo);
+  
+  // Update badge when page loading completes or URL changes
+  if ((changeInfo.status === 'complete' || changeInfo.url) && excludedTabs.has(tabId)) {
+    await updateTabBadge(tabId, true);
+  }
+  
   if (processingTabs.has(tabId)) {
     logDebug(`Tab ${tabId} already being processed, skipping`);
     return;
@@ -554,12 +586,27 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 // Handle navigation events for domain changes
 browser.webNavigation.onBeforeNavigate.addListener(async (details) => {
   if (details.frameId !== 0) return; // Only handle main frame navigations
+  
   const tabId = details.tabId;
+  
+  // Check if tab is excluded from domain isolation
+  if (excludedTabs.has(tabId)) {
+    logDebug(`Tab ${tabId} is excluded from domain isolation, skipping navigation handling`);
+    const newUrl = details.url;
+    tabUrls.set(tabId, newUrl); // Still update stored URL for tracking
+	
+	// Update badge to ensure it shows after navigation
+    await updateTabBadge(tabId, true);
+    return;
+  }
+  
   logDebug(`onBeforeNavigate triggered - tabId: ${tabId}, url: ${details.url}`);
+  
   if (addonCreatedTabs.has(tabId) || pendingTabs.has(tabId)) {
     logDebug(`Skipping tab ${tabId} as it's addon-created or pending`);
     return;
   }
+  
   const newUrl = details.url;
   const newDomain = getDomain(newUrl);
   const tab = await browser.tabs.get(tabId);
@@ -567,6 +614,7 @@ browser.webNavigation.onBeforeNavigate.addListener(async (details) => {
   const storedUrl = tabUrls.get(tabId);
   const currentUrl = storedUrl || tab.url;
   const currentDomain = getDomain(currentUrl);
+  
   logDebug(`Domain comparison - Current: ${currentDomain} (from ${currentUrl}), New: ${newDomain} (from ${newUrl})`);
   const currentContainer = tab.cookieStoreId ? await browser.contextualIdentities.get(tab.cookieStoreId).catch(() => null) : null;
   const isTempContainer = currentContainer && /^tmp_\d+$/.test(currentContainer.name);
@@ -656,7 +704,10 @@ browser.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
   pendingTabs.delete(tabId);
   addonCreatedTabs.delete(tabId);
   tabProcessingCount.delete(tabId);
+  excludedTabs.delete(tabId); // Clean up exclusion tracking
+  
   const tab = await browser.tabs.get(tabId).catch(() => null);
+  
   if (tab && tab.cookieStoreId) {
     const container = await browser.contextualIdentities.get(tab.cookieStoreId).catch(() => null);
     if (container && /^tmp_\d+$/.test(container.name)) {
@@ -670,20 +721,26 @@ browser.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
 
 // Handle new tabs with available URL
 async function handleNewTab(tab) {
-  if (!tab.url || tab.url === 'about:blank' || tab.url === 'about:newtab') {
-    logDebug(`Tab URL is invalid or not set, skipping: ${tab.id}`);
-    return;
-  }
+	// Skip if tab is excluded from domain isolation
+	if (excludedTabs.has(tab.id)) {
+		logDebug(`Tab ${tab.id} is excluded from domain isolation, skipping handleNewTab processing`);
+		return;
+	}
+	
+	if (!tab.url || tab.url === 'about:blank' || tab.url === 'about:newtab') {
+		logDebug(`Tab URL is invalid or not set, skipping: ${tab.id}`);
+		return;
+	}
   
   // Skip extension pages
   if (tab.url.startsWith('moz-extension://')) {
-    logDebug(`Tab ${tab.id} is extension page, skipping container processing: ${tab.url}`);
-    return;
+	  logDebug(`Tab ${tab.id} is extension page, skipping container processing: ${tab.url}`);
+	  return;
   }
-  
+
   if (processingTabs.has(tab.id)) {
-    logDebug(`Tab ${tab.id} already being processed, skipping`);
-    return;
+	  logDebug(`Tab ${tab.id} already being processed, skipping`);
+	  return;
   }
   
   processingTabs.add(tab.id);
@@ -747,7 +804,30 @@ async function handleNewTab(tab) {
 browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   try {
     logDebug('Received message:', message);
-    if (message.action === 'sortRules') {
+	
+	if (message.action === 'excludeTab') {
+      const tabId = message.tabId;
+      if (!excludedTabs.has(tabId)) {
+        excludedTabs.add(tabId);
+        await updateTabBadge(tabId, true);
+        logDebug(`Tab ${tabId} added to domain isolation exclusions`);
+      }
+      return { 
+        success: true, 
+        isExcluded: true
+      };
+    } else if (message.action === 'removeExclusion') {
+      const tabId = message.tabId;
+      if (excludedTabs.has(tabId)) {
+        excludedTabs.delete(tabId);
+        await updateTabBadge(tabId, false);
+        logDebug(`Tab ${tabId} removed from domain isolation exclusions`);
+      }
+      return { 
+        success: true, 
+        isExcluded: false 
+      };
+    } else if (message.action === 'sortRules') {
       logDebug('Processing sortRules message');
       const { rules = '' } = await browser.storage.local.get('rules');
       const sortedRules = sortRules(rules);
@@ -770,7 +850,30 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
 // On startup, delete empty temporary containers and start timers for non-empty ones
 (async () => {
   logDebug('Background script loaded');
+  
+  // Create main context menu with submenu
+  browser.contextMenus.create({
+    id: "auto-containers-main",
+    title: "Auto Containers",
+    contexts: ["page", "link", "selection"]
+  });
+  
+  browser.contextMenus.create({
+    id: "exclude-from-isolation",
+    parentId: "auto-containers-main",
+    title: "Exclude tab from domain isolation",
+    contexts: ["page", "link", "selection"]
+  });
+  
+  browser.contextMenus.create({
+    id: "remove-from-exclusions",
+    parentId: "auto-containers-main", 
+    title: "Remove tab from exclusions",
+    contexts: ["page", "link", "selection"]
+  });
+  
   const tempContainers = await getTempContainers();
+
   for (const container of tempContainers) {
     const tabs = await browser.tabs.query({ cookieStoreId: container.cookieStoreId });
     if (tabs.length === 0) {
@@ -781,3 +884,20 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
     }
   }
 })();
+
+// Context menu click handler
+browser.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === "exclude-from-isolation") {
+    if (!excludedTabs.has(tab.id)) {
+      excludedTabs.add(tab.id);
+      await updateTabBadge(tab.id, true);
+      logDebug(`Tab ${tab.id} added to domain isolation exclusions`);
+    }
+  } else if (info.menuItemId === "remove-from-exclusions") {
+    if (excludedTabs.has(tab.id)) {
+      excludedTabs.delete(tab.id);
+      await updateTabBadge(tab.id, false);
+      logDebug(`Tab ${tab.id} removed from domain isolation exclusions`);
+    }
+  }
+});
