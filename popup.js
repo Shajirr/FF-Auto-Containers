@@ -106,6 +106,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load existing containers
   const existingContainers = document.getElementById('existingContainers');
   const containerNameInput = document.getElementById('containerName');
+  const convertCheckbox = document.getElementById('convertTempContainer');
+  
+  if (currentTab.cookieStoreId && currentTab.cookieStoreId !== 'firefox-default') {
+    try {
+      const container = await browser.contextualIdentities.get(currentTab.cookieStoreId);
+      const isTemp = /^tmp_\d+$/.test(container.name);
+      if (isTemp) {
+        convertCheckbox.disabled = false;
+        convertCheckbox.title = `Rename "${container.name}" to the new container name`;
+      }
+    } catch (e) {
+      // Container doesn't exist or error occurred
+    }
+  }
   
   let currentTabContainer = null;
   try {
@@ -133,9 +147,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.target.value) {
       containerNameInput.value = e.target.value;
       containerNameInput.disabled = true;
+      convertCheckbox.checked = false;
+      convertCheckbox.disabled = true;
     } else {
       containerNameInput.value = '';
       containerNameInput.disabled = false;
+      // Re-enable 'convert' checkbox if current container is temp
+      const isCurrentTempContainer = currentTab.cookieStoreId && currentTab.cookieStoreId !== 'firefox-default' && 
+                                     currentTabContainer && /^tmp_\d+$/.test(currentTabContainer.name);
+      convertCheckbox.disabled = !isCurrentTempContainer;
       containerNameInput.focus();
     }
   });
@@ -144,8 +164,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 	document.getElementById('saveRule').addEventListener('click', async () => {
 	  const pattern = patternInput.value.trim();
 	  const containerName = containerNameInput.value.trim();
+      const convertTempContainer = convertCheckbox.checked;
 
-	  logDebug('Save rule clicked:', { pattern, containerName });
+	  logDebug('Save rule clicked:', { pattern, containerName, convertTempContainer });
 
 	  if (!pattern) {
 		showMessage('Please enter a pattern', 'error');
@@ -192,6 +213,26 @@ document.addEventListener('DOMContentLoaded', async () => {
 		  return;
 		}
 
+		// If 'convert temp container is selected, check for container name conflicts
+		let targetContainerId = null;
+		if (convertTempContainer) {
+		  // Check if container name matches an existing permanent container
+		  const identities = await browser.contextualIdentities.query({});
+		  const existingContainer = identities.find(c => c.name === containerName && !/^tmp_\d+$/.test(c.name));
+		  
+		  if (existingContainer) {
+			showMessage('Cannot convert temp container: a permanent container with this name already exists', 'error');
+			return;
+		  }
+		  
+		  // Get the current temp container to rename
+		  if (currentTab.cookieStoreId && currentTab.cookieStoreId !== 'firefox-default') {
+			const currentContainer = await browser.contextualIdentities.get(currentTab.cookieStoreId).catch(() => null);
+			if (currentContainer && /^tmp_\d+$/.test(currentContainer.name)) {
+			  targetContainerId = currentTab.cookieStoreId;
+			}
+		  }
+        }
 		// Add new rule
 		existingRules.push(newRule);
 		const updatedRules = existingRules.join('\n');
@@ -202,10 +243,33 @@ document.addEventListener('DOMContentLoaded', async () => {
 		logDebug('Rules saved to storage');
 
 		// Verify the save worked
-		const { rules: savedRules } = await browser.storage.local.get('rules');
-		logDebug('Rules after saving:', savedRules);
+        if (DEBUG) {
+          const { rules: savedRules } = await browser.storage.local.get('rules');
+          logDebug('Rules after saving:', savedRules);
+        }
 
-		showMessage('Rule added successfully!', 'success');
+        // Rename container if checkbox was checked
+		if (convertTempContainer && targetContainerId) {
+		  try {
+            // Get current container properties first 
+            const currentContainer = await browser.contextualIdentities.get(targetContainerId);
+            logDebug(`Container before update: ${JSON.stringify(currentContainer)}`);
+            
+			const updatedContainer = await browser.contextualIdentities.update(targetContainerId, {
+			  name: containerName,
+              color: currentContainer.color,
+              icon: currentContainer.icon
+			});
+            logDebug(`Container after update: ${JSON.stringify(updatedContainer)}`);
+			logDebug(`Renamed container ${targetContainerId} to ${containerName}`);
+			showMessage(`Rule added and container renamed to "${containerName}"!`, 'success');
+		  } catch (renameError) {
+			console.error('Error renaming container:', renameError);
+			showMessage('Rule added but failed to rename container', 'error');
+		  }
+		} else {
+		  showMessage('Rule added successfully!', 'success');
+		}
 
 		// Sort rules for optimal lookup performance
 		try {
@@ -226,6 +290,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 		// Clear form
 		patternInput.value = domain; // Reset to default
 		containerNameInput.value = '';
+        convertCheckbox.checked = false;
 		existingContainers.selectedIndex = 0;
 		containerNameInput.disabled = false;
 
