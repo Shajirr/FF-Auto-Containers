@@ -107,18 +107,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   const existingContainers = document.getElementById('existingContainers');
   const containerNameInput = document.getElementById('containerName');
   const convertCheckbox = document.getElementById('convertTempContainer');
+  const convertSection = document.getElementById('convertTempContainerSection');
   
   if (currentTab.cookieStoreId && currentTab.cookieStoreId !== 'firefox-default') {
     try {
       const container = await browser.contextualIdentities.get(currentTab.cookieStoreId);
       const isTemp = /^tmp_\d+$/.test(container.name);
       if (isTemp) {
-        convertCheckbox.disabled = false;
+        convertSection.style.display = 'block';
         convertCheckbox.title = `Rename "${container.name}" to the new container name`;
-      }
+      } else {
+	    onvertSection.style.display = 'none';
+	  }
     } catch (e) {
       // Container doesn't exist or error occurred
+	  convertSection.style.display = 'none';
     }
+  } else {
+	  convertSection.style.display = 'none';
   }
   
   let currentTabContainer = null;
@@ -148,15 +154,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       containerNameInput.value = e.target.value;
       containerNameInput.disabled = true;
       convertCheckbox.checked = false;
-      convertCheckbox.disabled = true;
+	  convertCheckbox.disabled = true;
     } else {
       containerNameInput.value = '';
       containerNameInput.disabled = false;
-      // Re-enable 'convert' checkbox if current container is temp
-      const isCurrentTempContainer = currentTab.cookieStoreId && currentTab.cookieStoreId !== 'firefox-default' && 
-                                     currentTabContainer && /^tmp_\d+$/.test(currentTabContainer.name);
-      convertCheckbox.disabled = !isCurrentTempContainer;
       containerNameInput.focus();
+	  convertCheckbox.disabled = false;
     }
   });
   
@@ -251,17 +254,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Rename container if checkbox was checked
 		if (convertTempContainer && targetContainerId) {
 		  try {
-            // Get current container properties first 
-            const currentContainer = await browser.contextualIdentities.get(targetContainerId);
-            logDebug(`Container before update: ${JSON.stringify(currentContainer)}`);
-            
-			const updatedContainer = await browser.contextualIdentities.update(targetContainerId, {
-			  name: containerName,
-              color: currentContainer.color,
-              icon: currentContainer.icon
+			await browser.contextualIdentities.update(targetContainerId, {
+			  name: containerName
 			});
-            logDebug(`Container after update: ${JSON.stringify(updatedContainer)}`);
 			logDebug(`Renamed container ${targetContainerId} to ${containerName}`);
+			
+			// Trigger URL bar refresh by switching tabs
+			const allTabs = await browser.tabs.query({ currentWindow: true });
+			if (allTabs.length > 1) {
+			  const otherTab = allTabs.find(tab => tab.id !== currentTab.id);
+			  if (otherTab) {
+				await browser.tabs.update(otherTab.id, { active: true });
+				await new Promise(resolve => setTimeout(resolve, 50));
+				await browser.tabs.update(currentTab.id, { active: true });
+			  }
+			}
+			
 			showMessage(`Rule added and container renamed to "${containerName}"!`, 'success');
 		  } catch (renameError) {
 			console.error('Error renaming container:', renameError);
@@ -297,7 +305,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 		// Close popup after delay
 		setTimeout(() => {
 		  window.close();
-		}, 1500);
+		}, 2500);
 	  } catch (error) {
 		console.error('Failed to save rule:', error);
 		showMessage('Failed to save rule', 'error');
