@@ -92,7 +92,7 @@ async function updateTabBadge(tabId, isExcluded) {
 // Function to check rules for permanent container
 async function getContainerForDomain(url) {
   try {
-	  const { rules = '' } = await browser.storage.local.get('rules');
+	  const { rules = '', containerStyles = {} } = await browser.storage.local.get(['rules', 'containerStyles']);
 	  const ruleLines = rules.split('\n').filter(line => line.trim() !== '');
 	  logDebug('Loaded ${ruleLines.length} rules:', ruleLines);
 	  
@@ -154,10 +154,12 @@ async function getContainerForDomain(url) {
 			logDebug(`Found existing container: ${containerName} (${identities[0].cookieStoreId}) for pattern: ${rulePattern}`);
 			return identities[0].cookieStoreId;
 		  }
+		  // Apply saved styles when creating container
+		  const styles = containerStyles[containerName] || { color: 'blue', icon: 'circle' }; 
 		  const identity = await browser.contextualIdentities.create({
 			name: containerName,
-			color: 'blue',
-			icon: 'circle'
+			color: styles.color,
+			icon: styles.icon
 		  });
 		  logDebug(`Created container: ${containerName} (${identity.cookieStoreId}) for pattern: ${rulePattern}`);
 		  return identity.cookieStoreId;

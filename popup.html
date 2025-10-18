@@ -7,15 +7,21 @@
   <title>Auto Containers</title>
   <style>
     body {
-      width: 350px;
-      padding: 16px;
+	  width: 350px;
+	  max-width: calc(100%);
+	  padding: 16px;
       font-family: -moz-system, system-ui, sans-serif;
       font-size: 13px;
       margin: 0;
       background: Canvas;
       color: CanvasText;
+      box-sizing: border-box;
     }
     
+    * {
+      box-sizing: border-box;
+    }
+	
     .current-tab {
       background: color-mix(in srgb, Canvas 85%, CanvasText 15%);
       padding: 12px;
@@ -59,7 +65,6 @@
       padding: 6px;
       border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
       border-radius: 3px;
-      box-sizing: border-box;
       font-family: monospace;
       font-size: 12px;
       background: Field;
@@ -98,6 +103,110 @@
       background: color-mix(in srgb, Canvas 70%, CanvasText 30%);
     }
     
+    .container-style {
+      margin-bottom: 16px;
+      padding: 0px;
+      background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
+      border-radius: 6px;
+    }
+    
+    .container-style-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      font-weight: bold;
+      color: CanvasText;
+    }
+    
+    .style-controls {
+      display: flex;
+      gap: 12px;
+    }
+	.style-section {
+      flex: 1;
+    }
+    
+    .style-section:first-child {
+      flex: 3;
+    }
+    
+    .style-section:last-child {
+      flex: 5;
+    }
+	  
+    .style-section label {
+      display: block;
+      font-size: 12px;
+      margin-bottom: 6px;
+      color: CanvasText;
+      font-weight: normal;
+    }
+    
+    .color-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+    }
+    
+    .color-swatch {
+      width: 100%;
+      aspect-ratio: 1;
+      border: 2px solid transparent;
+      border-radius: 50%;
+      cursor: pointer;
+      transition: all 0.15s ease;
+	  transform: scale(0.85);
+    }
+    
+    .color-swatch:hover {
+      transform: scale(1);
+      border-color: CanvasText;
+    }
+    
+	.color-swatch.selected {
+		border-color: white;
+		border: 2px solid;
+		box-shadow: 0 0 3px 3px AccentColor;
+	}
+    
+    .icon-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 5px;
+    }
+    
+    .icon-option {
+      width: 100%;
+      aspect-ratio: 1;
+      border: 2px solid color-mix(in srgb, CanvasText 30%, transparent);
+      border-radius: 4px;
+      background: Field;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+      font-size: 18px;
+    }
+    
+    .icon-option:hover {
+      transform: scale(1.08);
+      border-color: CanvasText;
+    }
+    
+    .icon-option.selected {
+      border-color: AccentColor;
+      background: color-mix(in srgb, AccentColor 20%, Field 80%);
+      box-shadow: inset 0 0 0 1px Canvas, inset 0 0 0 2px AccentColor;
+    }
+	
+	.style-buttons {
+	  padding: 0 12px 12px 12px;
+	  display: flex;
+	  gap: 8px;
+	}
+	
     .container-input {
       margin-bottom: 12px;
     }
@@ -114,7 +223,6 @@
       padding: 6px;
       border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
       border-radius: 3px;
-      box-sizing: border-box;
       background: Field;
       color: FieldText;
     }
@@ -158,6 +266,7 @@
     .buttons button.secondary:hover {
       background: color-mix(in srgb, Canvas 70%, CanvasText 30%);
     }
+	
     .status-message {
       margin-top: 12px;
       padding: 8px;
@@ -183,12 +292,10 @@
     }
     
     .existing-containers select {
-      width: fit-content;
-      min-width: 100%;
+      width: 100%;
       padding: 6px;
       border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
       border-radius: 3px;
-      box-sizing: border-box;
       background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
       color: FieldText;
     }
@@ -260,7 +367,44 @@
     .hidden {
       display: none;
     }
-
+	
+    /* Styling for collapsible container-style section */
+    details.container-style {
+      margin-bottom: 16px;
+      padding: 0;
+      background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
+      border-radius: 6px;
+    }
+    
+    details.container-style > summary {
+      padding: 12px;
+      font-weight: bold;
+      color: CanvasText;
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    details.container-style > summary::-webkit-details-marker {
+      display: none;
+    }
+    
+    details.container-style > summary::before {
+      content: '▶';
+      font-size: 12px;
+      color: CanvasText;
+      transition: transform 0.2s ease;
+    }
+    
+    details.container-style[open] > summary::before {
+      transform: rotate(90deg);
+    }
+    
+    details.container-style > .style-controls {
+      padding: 0 12px 12px 12px;
+    }
     @media (prefers-color-scheme: dark) {
       .existing-containers select {
         appearance: none;
@@ -270,6 +414,15 @@
         background-position: right 8px center;
         padding-right: 28px;
       }
+	  
+	  .icon-option {
+		background-color: #d8d8d8;
+		filter: invert(1);
+	  }
+	  
+	  .icon-option.selected {
+		background-color: AccentColor;
+	  }
     }
   </style>
 </head>
@@ -294,6 +447,22 @@
     </div>
   </div>
   
+  <details class="container-style">
+    <summary>Container Style</summary>
+    <div class="style-controls">
+      <div class="style-section">
+        <label>Color:</label>
+        <div class="color-grid" id="colorGrid"></div>
+      </div>
+      <div class="style-section">
+        <label>Icon:</label>
+        <div class="icon-grid" id="iconGrid"></div>
+      </div>
+    </div>
+	<div class="style-buttons">
+		<button id="applyToCurrentContainer" class="secondary">Apply to current container</button>
+	</div>
+  </details>
   <div class="container-input">
     <label for="containerName">Container Name:</label>
     <div class="existing-containers">

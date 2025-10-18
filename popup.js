@@ -4,17 +4,41 @@ function logDebug(...args) {
   if (DEBUG) console.log(...args);
 }
 
+// Firefox contextual identity colors and icons
+const COLORS = ['blue', 'turquoise', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'toolbar'];
+const ICONS = ['fingerprint', 'briefcase', 'dollar', 'cart', 'vacation', 'gift', 'food', 'fruit', 'pet', 'tree', 'chill', 'circle', 'fence'];
+
+async function refreshUrlBar(currentTab) {
+  try {
+    const allTabs = await browser.tabs.query({ currentWindow: true });
+    if (allTabs.length > 1) {
+      const otherTab = allTabs.find(tab => tab.id !== currentTab.id);
+      if (otherTab) {
+        await browser.tabs.update(otherTab.id, { active: true });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        await browser.tabs.update(currentTab.id, { active: true });
+      }
+    }
+  } catch (error) {
+    console.error('Error refreshing URL bar:', error);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // Get current tab info
   const tabs = await browser.tabs.query({ active: true, currentWindow: true });
   const currentTab = tabs[0];
   
+  const convertSection = document.getElementById('convertTempContainerSection');
+  const convertCheckbox = document.getElementById('convertTempContainer');
   if (!currentTab || !currentTab.url || currentTab.url.startsWith('about:') || currentTab.url.startsWith('moz-extension:')) {
     document.getElementById('currentUrl').textContent = 'Cannot add rules for this page';
     document.querySelector('.pattern-input').style.display = 'none';
     document.querySelector('.quick-suggestions').style.display = 'none';
+	    document.querySelector('.container-style').style.display = 'none';
     document.querySelector('.container-input').style.display = 'none';
     document.querySelector('.buttons').style.display = 'none';
+    convertSection.style.display = 'none';
     return;
   }
   
@@ -34,14 +58,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Get container info
   let containerInfo = 'Default Container';
+  let currentContainerColor = 'blue';
+  let currentContainerIcon = 'circle';
+  let isTempContainer = false;
   if (currentTab.cookieStoreId && currentTab.cookieStoreId !== 'firefox-default') {
     try {
       const container = await browser.contextualIdentities.get(currentTab.cookieStoreId);
-      const isTemp = /^tmp_\d+$/.test(container.name);
-      containerInfo = `Container: ${container.name}${isTemp ? ' (temporary)' : ''}`;
+      isTempContainer = /^tmp_\d+$/.test(container.name);
+      containerInfo = `Container: ${container.name}${isTempContainer ? ' (temporary)' : ''}`;
+      currentContainerColor = container.color;
+      currentContainerIcon = container.icon;
+      if (isTempContainer) {
+        convertSection.style.display = 'block';
+        convertCheckbox.title = `Rename "${container.name}" to the new container name`;
+      } else {
+        convertSection.style.display = 'none';
+      }
     } catch (e) {
       containerInfo = 'Unknown Container';
-    }
+	  convertSection.style.display = 'none';
+    }								  
+  } else {
+    convertSection.style.display = 'none';
   }
   document.getElementById('currentContainer').textContent = containerInfo;
   
@@ -103,39 +141,77 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Set default pattern to domain
   patternInput.value = domain;
   
+  // Set up color/icon selection
+  const colorGrid = document.getElementById('colorGrid');
+  const iconGrid = document.getElementById('iconGrid');
+  let selectedColor = currentContainerColor;
+  let selectedIcon = currentContainerIcon;
+  
+  // Populate color swatches
+  COLORS.forEach(color => {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'color-swatch';
+    swatch.dataset.color = color;
+    swatch.style.backgroundColor = getColorValue(color);
+    swatch.title = color;
+    
+    if (color === selectedColor) {
+      swatch.classList.add('selected');
+    }
+    
+    swatch.addEventListener('click', () => {
+      colorGrid.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+      swatch.classList.add('selected');
+      selectedColor = color;
+    });
+    
+    colorGrid.appendChild(swatch);
+  });
+  
+  // Populate icon options
+  ICONS.forEach(icon => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'icon-option';
+    btn.dataset.icon = icon;
+    btn.title = icon;
+	btn.textContent = ''; // Don't set text
+	
+	btn.style.cursor = 'pointer';
+	btn.style.backgroundImage = `url('resource://usercontext-content/${icon}.svg')`;
+	btn.style.backgroundSize = '80%';
+	btn.style.backgroundRepeat = 'no-repeat';
+	btn.style.backgroundPosition = 'center';
+    
+    if (icon === selectedIcon) {
+      btn.classList.add('selected');
+    }
+    
+    btn.addEventListener('click', () => {
+      iconGrid.querySelectorAll('.icon-option').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      selectedIcon = icon;
+    });
+    
+    iconGrid.appendChild(btn);
+  });
+  
   // Load existing containers
   const existingContainers = document.getElementById('existingContainers');
   const containerNameInput = document.getElementById('containerName');
-  const convertCheckbox = document.getElementById('convertTempContainer');
-  const convertSection = document.getElementById('convertTempContainerSection');
-  
-  if (currentTab.cookieStoreId && currentTab.cookieStoreId !== 'firefox-default') {
-    try {
-      const container = await browser.contextualIdentities.get(currentTab.cookieStoreId);
-      const isTemp = /^tmp_\d+$/.test(container.name);
-      if (isTemp) {
-        convertSection.style.display = 'block';
-        convertCheckbox.title = `Rename "${container.name}" to the new container name`;
-      } else {
-	    onvertSection.style.display = 'none';
-	  }
-    } catch (e) {
-      // Container doesn't exist or error occurred
-	  convertSection.style.display = 'none';
-    }
-  } else {
-	  convertSection.style.display = 'none';
-  }
-  
   let currentTabContainer = null;
   try {
     const identities = await browser.contextualIdentities.query({});
     const permanentContainers = identities.filter(identity => !/^tmp_\d+$/.test(identity.name));
+	const { containerStyles = {} } = await browser.storage.local.get('containerStyles');
     
     permanentContainers.forEach(container => {
       const option = document.createElement('option');
       option.value = container.name;
       option.textContent = container.name;
+      option.dataset.color = containerStyles[container.name]?.color || container.color;
+      option.dataset.icon = containerStyles[container.name]?.icon || container.icon;
       existingContainers.appendChild(option);
     });
     // Get current tab's container for related rules
@@ -146,8 +222,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.error('Failed to load containers:', e);
   }
   
-  // Load and display related rules
-  await loadRelatedRules(currentTabContainer);
   // Handle container selection
   existingContainers.addEventListener('change', (e) => {
     if (e.target.value) {
@@ -155,21 +229,48 @@ document.addEventListener('DOMContentLoaded', async () => {
       containerNameInput.disabled = true;
       convertCheckbox.checked = false;
 	  convertCheckbox.disabled = true;
+	  // Update color/icon when selecting an existing container
+      const selectedOption = e.target.options[e.target.selectedIndex];
+      selectedColor = selectedOption.dataset.color;
+      selectedIcon = selectedOption.dataset.icon;
+      
+      colorGrid.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+      iconGrid.querySelectorAll('.icon-option').forEach(b => b.classList.remove('selected'));
+      
+      const colorSwatch = colorGrid.querySelector(`.color-swatch[data-color="${selectedColor}"]`);
+      if (colorSwatch) colorSwatch.classList.add('selected');
+      
+      const iconOption = iconGrid.querySelector(`.icon-option[data-icon="${selectedIcon}"]`);
+      if (iconOption) iconOption.classList.add('selected');
     } else {
       containerNameInput.value = '';
       containerNameInput.disabled = false;
+      convertCheckbox.disabled = !isTempContainer;
       containerNameInput.focus();
-	  convertCheckbox.disabled = false;
+      selectedColor = 'blue';
+      selectedIcon = 'circle';
+      
+      colorGrid.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+      iconGrid.querySelectorAll('.icon-option').forEach(b => b.classList.remove('selected'));
+      
+      const colorSwatch = colorGrid.querySelector(`.color-swatch[data-color="${selectedColor}"]`);
+      if (colorSwatch) colorSwatch.classList.add('selected');
+      
+      const iconOption = iconGrid.querySelector(`.icon-option[data-icon="${selectedIcon}"]`);
+      if (iconOption) iconOption.classList.add('selected');
     }
   });
   
-	// Handle save rule
-	document.getElementById('saveRule').addEventListener('click', async () => {
+  // Load and display related rules
+  await loadRelatedRules(currentTabContainer);
+	
+  // Handle save rule
+  document.getElementById('saveRule').addEventListener('click', async () => {
 	  const pattern = patternInput.value.trim();
 	  const containerName = containerNameInput.value.trim();
       const convertTempContainer = convertCheckbox.checked;
 
-	  logDebug('Save rule clicked:', { pattern, containerName, convertTempContainer });
+   logDebug('Save rule clicked:', { pattern, containerName, convertTempContainer, selectedColor, selectedIcon });
 
 	  if (!pattern) {
 		showMessage('Please enter a pattern', 'error');
@@ -198,8 +299,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 	  try {
 		// Load existing rules
-		const { rules = '' } = await browser.storage.local.get('rules');
+		const { rules = '', containerStyles = {} } = await browser.storage.local.get(['rules', 'containerStyles']);
 		logDebug('Current rules before adding:', rules);
+		logDebug('Current containerStyles:', containerStyles);
 		const existingRules = rules.split('\n').filter(line => line.trim() !== '');
 		logDebug('Existing rules array:', existingRules);
 
@@ -218,6 +320,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 		// If 'convert temp container is selected, check for container name conflicts
 		let targetContainerId = null;
+		let shouldSaveStyles = false;
 		if (convertTempContainer) {
 		  // Check if container name matches an existing permanent container
 		  const identities = await browser.contextualIdentities.query({});
@@ -232,43 +335,50 @@ document.addEventListener('DOMContentLoaded', async () => {
 		  if (currentTab.cookieStoreId && currentTab.cookieStoreId !== 'firefox-default') {
 			const currentContainer = await browser.contextualIdentities.get(currentTab.cookieStoreId).catch(() => null);
 			if (currentContainer && /^tmp_\d+$/.test(currentContainer.name)) {
-			  targetContainerId = currentTab.cookieStoreId;
-			}
+				targetContainerId = currentTab.cookieStoreId;
+				shouldSaveStyles = true;
+			} 
 		  }
-        }
+		} else if (!containerStyles[containerName]) {
+			shouldSaveStyles = true;
+		}						
+
 		// Add new rule
 		existingRules.push(newRule);
 		const updatedRules = existingRules.join('\n');
 		logDebug('Updated rules before saving:', updatedRules);
 
+		const saveData = { rules: updatedRules };
+		
+		if (shouldSaveStyles) {
+			saveData.containerStyles = {
+				  ...containerStyles,
+				  [containerName]: { color: selectedColor, icon: selectedIcon }
+			};
+		}
 		// Save rules
-		await browser.storage.local.set({ rules: updatedRules });
-		logDebug('Rules saved to storage');
+		await browser.storage.local.set(saveData);
+		logDebug('Rules / styles data saved to storage');
 
 		// Verify the save worked
         if (DEBUG) {
-          const { rules: savedRules } = await browser.storage.local.get('rules');
-          logDebug('Rules after saving:', savedRules);
+			const { rules: savedRules, containerStyles: savedStyles } = await browser.storage.local.get(['rules', 'containerStyles']);
+			logDebug('Rules after saving:', savedRules);
+			logDebug('Container styles after saving:', savedStyles);
         }
 
         // Rename container if checkbox was checked
 		if (convertTempContainer && targetContainerId) {
 		  try {
 			await browser.contextualIdentities.update(targetContainerId, {
-			  name: containerName
-			});
-			logDebug(`Renamed container ${targetContainerId} to ${containerName}`);
+            name: containerName,
+            color: selectedColor,
+            icon: selectedIcon
+          });
+          logDebug(`Renamed container ${targetContainerId} to ${containerName} with color ${selectedColor} and icon ${selectedIcon}`);
 			
 			// Trigger URL bar refresh by switching tabs
-			const allTabs = await browser.tabs.query({ currentWindow: true });
-			if (allTabs.length > 1) {
-			  const otherTab = allTabs.find(tab => tab.id !== currentTab.id);
-			  if (otherTab) {
-				await browser.tabs.update(otherTab.id, { active: true });
-				await new Promise(resolve => setTimeout(resolve, 50));
-				await browser.tabs.update(currentTab.id, { active: true });
-			  }
-			}
+			await refreshUrlBar(currentTab);
 			
 			showMessage(`Rule added and container renamed to "${containerName}"!`, 'success');
 		  } catch (renameError) {
@@ -301,14 +411,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         convertCheckbox.checked = false;
 		existingContainers.selectedIndex = 0;
 		containerNameInput.disabled = false;
+		convertCheckbox.disabled = !isTempContainer;
 
+		selectedColor = 'blue';
+		selectedIcon = 'circle';
+		colorGrid.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+		iconGrid.querySelectorAll('.icon-option').forEach(b => b.classList.remove('selected'));
+
+		const colorSwatch = colorGrid.querySelector(`.color-swatch[data-color="${selectedColor}"]`);
+		if (colorSwatch) colorSwatch.classList.add('selected');
+      
+		const iconOption = iconGrid.querySelector(`.icon-option[data-icon="${selectedIcon}"]`);
+		if (iconOption) iconOption.classList.add('selected');
 		// Close popup after delay
 		setTimeout(() => {
 		  window.close();
 		}, 2500);
 	  } catch (error) {
-		console.error('Failed to save rule:', error);
-		showMessage('Failed to save rule', 'error');
+			console.error('Failed to save rule:', error);
+			showMessage('Failed to save rule', 'error');
 	  }
 	});
   
@@ -321,6 +442,40 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Handle save edits
   document.getElementById('saveEdits').addEventListener('click', async () => {
     await saveRuleEdits();
+  });
+  
+  document.getElementById('applyToCurrentContainer').addEventListener('click', async () => {
+	  if (!currentTab.cookieStoreId || currentTab.cookieStoreId === 'firefox-default') {
+		showMessage('No container selected for this tab', 'error');
+		return;
+	  }
+
+	  try {
+		const currentContainer = await browser.contextualIdentities.get(currentTab.cookieStoreId);
+		const containerName = currentContainer.name;
+
+		// Update container style
+		await browser.contextualIdentities.update(currentTab.cookieStoreId, {
+		  name: containerName,
+		  color: selectedColor,
+		  icon: selectedIcon
+		});
+
+		// Save style to storage
+		const { containerStyles = {} } = await browser.storage.local.get('containerStyles');
+		containerStyles[containerName] = { color: selectedColor, icon: selectedIcon };
+		await browser.storage.local.set({ containerStyles });
+
+		logDebug(`Updated container ${containerName} with color ${selectedColor} and icon ${selectedIcon}`);
+
+		// Refresh URL bar to reflect changes
+		await refreshUrlBar(currentTab);
+
+		showMessage(`Container style updated for "${containerName}"!`, 'success');
+	  } catch (error) {
+		console.error('Failed to update container style:', error);
+		showMessage('Failed to update container style', 'error');
+	  }
   });
   
   async function loadRelatedRules(currentContainer) {
@@ -505,6 +660,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       showMessage('Failed to save rules', 'error');
     }
   }
+  
   function showMessage(text, type) {
     const messageEl = document.getElementById('statusMessage');
     messageEl.textContent = text;
@@ -515,4 +671,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       messageEl.classList.add('hidden');
     }, 3000);
   }
+
+  function getColorValue(color) {
+    const colors = {
+      blue: '#37adff',
+      turquoise: '#00c79b',
+      green: '#51cd00',
+      yellow: '#ffcb00',
+      orange: '#ff9f00',
+      red: '#ff613d',
+      pink: '#ff4bda',
+      purple: '#af51f5'
+    };
+    return colors[color] || '#37adff';
+  }
+  
 });
