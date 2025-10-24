@@ -11,6 +11,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 	const showNotifications = document.getElementById('showNotifications');
 	const saveButton = document.getElementById('saveButton');
 	const saveMessage = document.getElementById('save-message');
+	
+	// Elements for temp container style
+	const colorGrid = document.getElementById('colorGrid');
+	const iconGrid = document.getElementById('iconGrid');
+	const randomColorCheckbox = document.getElementById('randomColor');
+	const randomIconCheckbox = document.getElementById('randomIcon');
 
 	// Check if DOM elements exist
 	if (!containerRules || !showNotifications || !saveButton || !saveMessage) {
@@ -34,6 +40,105 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 	// Load existing settings
 	const { rules = '', notifications = true } = await browser.storage.local.get(['rules', 'notifications']);
+	
+	
+	// Load default temp container style
+	const { tempContainerStyle = { color: 'blue', icon: 'circle', randomColor: false, randomIcon: false } } = await browser.storage.local.get('tempContainerStyle');
+	
+	let selectedColor = tempContainerStyle.color;
+	let selectedIcon = tempContainerStyle.icon;
+	randomColorCheckbox.checked = tempContainerStyle.randomColor || false;
+	randomIconCheckbox.checked = tempContainerStyle.randomIcon || false;
+
+	// Firefox contextual identity colors and icons
+	const COLORS = ['blue', 'turquoise', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'toolbar'];
+	const ICONS = ['fingerprint', 'briefcase', 'dollar', 'cart', 'vacation', 'gift', 'food', 'fruit', 'pet', 'tree', 'chill', 'circle', 'fence'];
+
+	// Helper: get CSS color value
+	function getColorValue(color) {
+	  const colors = {
+	    blue: '#37adff',
+	    turquoise: '#00c79b',
+	    green: '#51cd00',
+	    yellow: '#ffcb00',
+	    orange: '#ff9f00',
+	    red: '#ff613d',
+	    pink: '#ff4bda',
+	    purple: '#af51f5'
+	  };
+	  return colors[color] || '#37adff';
+	}
+
+	// Populate color swatches
+	COLORS.forEach(color => {
+	  const swatch = document.createElement('button');
+	  swatch.type = 'button';
+	  swatch.className = 'color-swatch';
+	  swatch.dataset.color = color;
+	  swatch.style.backgroundColor = getColorValue(color);
+	  swatch.title = color;
+	  
+	  if (color === selectedColor && !randomColorCheckbox.checked) {
+	    swatch.classList.add('selected');
+	  }
+	  
+	  swatch.addEventListener('click', () => {
+	    if (randomColorCheckbox.checked) return;
+	    colorGrid.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+	    swatch.classList.add('selected');
+	    selectedColor = color;
+	  });
+	  
+	  colorGrid.appendChild(swatch);
+	});
+
+
+	// Populate icon options
+	ICONS.forEach(icon => {
+	  const btn = document.createElement('button');
+	  btn.type = 'button';
+	  btn.className = 'icon-option';
+	  btn.dataset.icon = icon;
+	  btn.title = icon;
+	  btn.style.backgroundImage = `url('resource://usercontext-content/${icon}.svg')`;
+	  btn.style.backgroundSize = '80%';
+	  btn.style.backgroundRepeat = 'no-repeat';
+	  btn.style.backgroundPosition = 'center';
+	  
+	  if (icon === selectedIcon && !randomIconCheckbox.checked) {
+	    btn.classList.add('selected');
+	  }
+	  
+	  btn.addEventListener('click', () => {
+	    if (randomIconCheckbox.checked) return;
+	    iconGrid.querySelectorAll('.icon-option').forEach(b => b.classList.remove('selected'));
+	    btn.classList.add('selected');
+	    selectedIcon = icon;
+	  });
+	  
+	  iconGrid.appendChild(btn);
+	});
+
+	// When a random checkbox is toggled, clear any selected swatch/button
+	randomColorCheckbox.addEventListener('change', () => {
+	  if (randomColorCheckbox.checked) {
+	    colorGrid.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+	  } else {
+	    // re-select the stored color if any
+	    const swatch = colorGrid.querySelector(`[data-color="${selectedColor}"]`);
+	    if (swatch) swatch.classList.add('selected');
+	  }
+	});
+
+	randomIconCheckbox.addEventListener('change', () => {
+	  if (randomIconCheckbox.checked) {
+	    iconGrid.querySelectorAll('.icon-option').forEach(b => b.classList.remove('selected'));
+	  } else {
+	    const btn = iconGrid.querySelector(`[data-icon="${selectedIcon}"]`);
+	    if (btn) btn.classList.add('selected');
+	  }
+	});
+
 	
 	logDebug('Loaded rules from storage');
     logDebug('Loaded notifications setting:', notifications);
@@ -148,7 +253,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 		// Save rules and notification setting
 		await browser.storage.local.set({
 		  rules: rulesText,
-		  notifications: showNotifications.checked
+		  notifications: showNotifications.checked,
+		  tempContainerStyle: {
+		    color: randomColorCheckbox.checked ? null : selectedColor,
+		    icon: randomIconCheckbox.checked ? null : selectedIcon,
+		    randomColor: randomColorCheckbox.checked,
+		    randomIcon: randomIconCheckbox.checked
+		  }
 		});
 
 		// Show success message

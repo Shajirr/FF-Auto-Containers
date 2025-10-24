@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Auto Containers",
-  "version": "2025.10.18",
+  "version": "2025.10.25",
   "description": "Automatically opens tabs in either temporary or permanent containers for domain isolation.",
   
   "browser_specific_settings": {

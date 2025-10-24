@@ -35,6 +35,84 @@
     .save-message.visible {
       opacity: 1;
     }
+	
+	/* ---------- Temp-container style UI ---------- */
+	
+	.style-controls {
+      display: flex;
+      gap: 20px;
+      margin-bottom: 16px;
+	  flex-wrap: wrap;
+	  max-width: 350px;
+	  width: 100%;
+	}
+	
+	.style-section {
+	  flex: 3 1 0;            /* color section = 3 parts */
+	  min-width: 0;
+	}
+	.style-section:last-child {
+	  flex: 5 1 0;            /* icon section = 5 parts */
+	  min-width: 0;
+	}
+	
+	.style-section label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: normal;
+	}
+
+	.color-grid, .icon-grid {
+	  display: grid;
+	  row-gap: 4px;
+	  column-gap: 8px;
+	  grid-auto-rows: min-content;
+	}
+	.color-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+	.icon-grid  { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+
+	.color-swatch, .icon-option {
+	  width: 100%;
+	  height: 100%;
+	  min-width: 0;
+	  max-width: 35px;
+	  max-height: 35px;
+	  border: 2px solid transparent;
+	  cursor: pointer;
+	  transition: all .15s ease;
+	  position: relative;
+	  box-sizing: border-box;
+	}
+
+	.color-swatch { border-radius: 50%; }
+	.icon-option  { border-radius: 4px; background-color: Field; }
+
+	.color-swatch:hover,
+	.icon-option:hover {
+		transform: scale(1.08);
+		border-color: CanvasText;
+	}
+	.color-swatch.selected,
+	.icon-option.selected {
+		border-color: AccentColor;
+		box-shadow: 0 0 0 2px Canvas, 0 0 0 4px AccentColor;
+	}
+
+  .random-options label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+
+    details summary {
+      cursor: pointer;
+      font-weight: bold;
+      margin: 16px 0 8px 0;
+      color: CanvasText;
+    }
+    details summary::marker,
+    details summary::-webkit-details-marker { display: none; }
   </style>
   <script src="options.js" defer></script>
 </head>
@@ -46,34 +124,73 @@
     Temporary Containers: <span id="temporaryContainers">0</span>
   </p>
   <h3>Container Rules</h3>
-  <p>
-  Enter rules to assign domains or URL patterns to specific permanent containers.<br>
-  Format: 
-  <code>Pattern, Container name</code> (one per line).<br>
-  One rule per line. '*' wildcards are supported, matching any number of any characters
-  <br>
-  <br>
-  <strong>URL pattern examples:</strong><br>
-  <code>google.com, GL</code> - matches all Google URLs, except for subdomains<br>
-  <code>google.*, GL</code> - matches google.com, goole.co.uk, google.fr, etc.<br>
-  <code>google.com/search, GoogleSearch</code> - matches Google Search pages only<br>
-  <code>google.*/search, Search</code> - matches Google Search on any top-level domain<br>
-  <code>mail.google.com, Gmail</code> - matches Gmail subdomain specifically, will not match google.com<br>
-  <code>*.google.com, GL</code> - matches Google subdomains like mail.google.com or docs.google.com, will not match google.com<br>
-  <code>*.google.*, GL</code> - matches all Google subdomains with any top-level domains, like docs.google.com or mail.google.co.uk<br>
-  <br>
-  <strong>Rule priority:</strong> More specific patterns are checked first.
-  </p>
+  
+    <p>
+    Enter rules to assign domains or URL patterns to specific permanent containers.<br>
+    Format: 
+    <code>Pattern, Container name</code><br>
+	One rule per line.<br>
+  
+<details id="rules-instructions">
+    <summary>Show rule instructions / examples</summary>
+
+    '*' wildcards are supported, matching any number of any characters
+    <br>
+    <br>
+    <strong>URL pattern examples:</strong><br>
+    <code>google.com, GL</code> - matches google.com URLs, except for subdomains.<br> 
+	Won't match goole.co.uk, google.fr, etc.<br>
+    <code>google.*, GL</code> - matches google.com, goole.co.uk, google.fr, etc.<br>
+    <code>google.com/search, GoogleSearch</code> - matches google.com Search pages only<br>
+    <code>google.*/search, Search</code> - matches Google Search on any top-level domain<br>
+    <code>mail.google.com, Gmail</code> - matches Gmail subdomain specifically, will not match google.com<br>
+    <code>*.google.com, GL</code> - matches Google subdomains like mail.google.com or docs.google.com, will not match google.com<br>
+    <code>*.google.*, GL</code> - matches all Google subdomains with any top-level domains, like docs.google.com or mail.google.co.uk<br>
+    <br>
+    <strong>Rule priority:</strong> More specific patterns are checked first.
+    </p>
+  </details>
+  
 	<textarea
 	  id="containerRules"
 	  placeholder="Enter rules, one per line, like:
 youtube.com, YT
 google.com, GL"
 	></textarea>
+	
+  <h3>Temporary Containers Default Style</h3>
+  <p>
+    Choose the default color and icon for new temporary containers.<br>
+    Select "Random" to pick a different color or icon each time a new temporary container is created.
+  </p>
+
+  <div class="style-controls">
+    <div class="style-section">
+      <label>Color:</label>
+      <div class="color-grid" id="colorGrid"></div>
+    </div>
+    <div class="style-section">
+      <label>Icon:</label>
+      <div class="icon-grid" id="iconGrid"></div>
+    </div>
+  </div>
+
+  <div class="random-options" style="margin-top: 12px; display: flex; gap: 16px;">
+    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+      <input type="checkbox" id="randomColor">
+      <span>Random color</span>
+    </label>
+    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+      <input type="checkbox" id="randomIcon">
+      <span>Random icon</span>
+    </label>
+  </div>
+  
   <p>
     <input type="checkbox" id="showNotifications">
     Show notifications
   </p>
+  
   <button id="saveButton">Save</button>
   <span id="save-message" class="save-message">Settings saved!</span>
 </body>

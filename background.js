@@ -21,6 +21,8 @@ const addonCreatedTabs = new Set();
 // Set to track tabs excluded from domain isolation
 const excludedTabs = new Set();
 
+const COLORS = ['blue', 'turquoise', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'toolbar'];
+const ICONS = ['fingerprint', 'briefcase', 'dollar', 'cart', 'vacation', 'gift', 'food', 'fruit', 'pet', 'tree', 'chill', 'circle', 'fence'];
 
 // Safeguard: Track processing operations to prevent infinite loops
 const MAX_PROCESSING_PER_TAB = 3;
@@ -73,6 +75,11 @@ async function getNextContainerNumber() {
     nextNum++;
   }
   return nextNum;
+}
+
+// Get random color or icon
+function getRandomItem(array) {
+  return array[Math.floor(Math.random() * array.length)];
 }
 
 // Function to update badge for excluded tabs
@@ -293,12 +300,20 @@ async function createTempContainer() {
   const num = await getNextContainerNumber();
   const name = `tmp_${num}`;
   logDebug('Creating temp container:', name);
+  
+  // Load default style
+  const { tempContainerStyle = { color: 'blue', icon: 'circle', randomColor: false, randomIcon: false } } = await browser.storage.local.get('tempContainerStyle');
+  
+  const color = tempContainerStyle.randomColor ? getRandomItem(COLORS) : (tempContainerStyle.color || 'blue');
+  const icon = tempContainerStyle.randomIcon ? getRandomItem(ICONS) : (tempContainerStyle.icon || 'circle');
+  
   const container = await browser.contextualIdentities.create({
     name: name,
-    color: 'blue',
-    icon: 'circle'
+    color: color,
+    icon: icon
   });
-  logDebug('Container created:', container);
+  
+  logDebug(`Created temp container: ${name} with color=${color}, icon=${icon}`);
   startDeletionTimer(container.cookieStoreId);
   return container;
 }
