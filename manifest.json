@@ -1,7 +1,11 @@
 {
   "manifest_version": 2,
   "name": "Auto Containers",
+<<<<<<< Updated upstream
   "version": "2025.10.25.1",
+=======
+  "version": "2025.11.6",
+>>>>>>> Stashed changes
   "description": "Automatically opens tabs in either temporary or permanent containers for domain isolation.",
   
   "browser_specific_settings": {
