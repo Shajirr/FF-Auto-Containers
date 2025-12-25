@@ -407,50 +407,6 @@ browser.tabs.onActivated.addListener(async (activeInfo) => {
 	
 	// Update badge for the activated tab
 	await updateTabBadge(activeInfo.tabId, excludedTabs.has(activeInfo.tabId));
-    
-    // Check if the activated tab needs to be moved to a container
-    if (tab.url && tab.url !== 'about:blank' && tab.url !== 'about:newtab') {
-	  // Skip if tab is excluded from domain isolation
-      if (excludedTabs.has(tab.id)) {
-        logDebug(`Tab ${tab.id} is excluded from domain isolation, skipping container check on activation`);
-        return;
-      }
-	  
-      const domain = getDomain(tab.url);
-      
-      // If tab has a domain but is in default container, move it to appropriate container
-      if (domain && tab.cookieStoreId === 'firefox-default') {
-        // Check if there's a permanent container rule for this domain
-        const targetContainerId = await getContainerForDomain(tab.url);
-        
-        if (targetContainerId) {
-          logDebug(`Moving activated tab ${tab.id} to permanent container: ${targetContainerId}`);
-          if (!incrementProcessingCount(tab.id)) {
-            console.error(`Skipping processing of tab ${tab.id} due to infinite loop protection`);
-            return;
-          }
-          processingTabs.add(tab.id);
-          try {
-            await replaceTabWithTempContainer(tab, tab.url);
-          } finally {
-            processingTabs.delete(tab.id);
-          }
-        } else {
-          // No permanent container, move to temp container
-          logDebug(`Moving activated tab ${tab.id} to temp container`);
-          if (!incrementProcessingCount(tab.id)) {
-            console.error(`Skipping processing of tab ${tab.id} due to infinite loop protection`);
-            return;
-          }
-          processingTabs.add(tab.id);
-          try {
-            await replaceTabWithTempContainer(tab, tab.url);
-          } finally {
-            processingTabs.delete(tab.id);
-          }
-        }
-      }
-    }
   } else {
     logDebug(`Active tab updated: ${activeInfo.tabId}, tab info unavailable`);
   }
@@ -666,6 +622,7 @@ browser.webNavigation.onBeforeNavigate.addListener(async (details) => {
         }
       }
     }
+	
     // Determine if we need to replace the tab
     let shouldReplace = false;
     let reason = '';
