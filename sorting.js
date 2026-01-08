@@ -18,11 +18,35 @@ function extractBaseDomain(domain) {
   // Normalize input: lowercase, remove www., and trim
   let normalized = domain.toLowerCase().replace(/^www\./, '').trim();
 
-  // Handle wildcard patterns
+  // Check for wildcard patterns before normalizing
+  const hadLeadingWildcard = normalized.startsWith('*.');
+  
+  // Store original for debugging
+  const originalPattern = normalized;
+  
   normalized = normalized
     .replace(/^\*\./, '') // *.google.com -> google.com
     .replace(/\.\*$/, '') // google.com.* -> google.com
     .replace(/\*/g, '');  // Remove any remaining wildcards (e.g., google.*.com)
+
+  // Special case: if pattern was "*.tld" (wildcard + TLD only), treat as global pattern
+  // These should sort after specific domains but before true global patterns
+  if (hadLeadingWildcard && normalized) {
+    const parts = normalized.split('.');
+	logDebug(`Checking *.pattern: original="${originalPattern}", normalized="${normalized}", parts=${parts.length}, isTldOnly check...`);
+    
+	// Check if it's just a TLD (single part) or a multi-part TLD
+    const isTldOnly = parts.length === 1 || 
+                     (parts.length === 2 && multiPartTlds.includes(normalized));
+					 
+	logDebug(`  -> isTldOnly=${isTldOnly}`);
+    
+    if (isTldOnly) {
+      // Sort after specific domains but before global catchalls
+	  logDebug(`  -> Returning global TLD key: zzzz_global_tld_${normalized}`);
+      return `zzzz_global_tld_${normalized}`;
+    }
+  }
 
   // Split into parts
   const parts = normalized.split('.');
@@ -215,7 +239,8 @@ function sortRules(rulesText) {
     const lines = rulesText.split('\n').filter(line => line.trim() !== '');
     if (lines.length === 0) return rulesText;
     logDebug(`Sorting ${lines.length} rules`);
-    // Validate all rules first
+    
+	// Validate all rules first
     const validRules = [];
     for (const line of lines) {
       const trimmed = line.trim();
@@ -231,6 +256,7 @@ function sortRules(rulesText) {
       validRules.push(trimmed);
     }
     if (validRules.length === 0) return '';
+	
     // Parse rules into objects with proper domain extraction
     const parsedRules = validRules.map((line, originalIndex) => {
       const [pattern, containerName] = line.split(',').map(part => part.trim());
@@ -243,6 +269,11 @@ function sortRules(rulesText) {
       }
       // Extract base domain for grouping (normalize wildcards)
       let sortDomain = extractBaseDomain(domain);
+	  
+	  // Force global wildcards to the absolute bottom
+	  if (pattern === '*' || pattern === '*.*' || pattern === '*/*') {
+		  sortDomain = 'zzzz_global_zzzz_catchall';
+	  }
 
       return {
         original: line,

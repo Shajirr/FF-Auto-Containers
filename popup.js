@@ -300,7 +300,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 	  try {
 		// Load existing rules
 		const { rules = '', containerStyles = {} } = await browser.storage.local.get(['rules', 'containerStyles']);
-		logDebug('Current rules before adding:', rules);
+		logDebug('Current rules before adding:\n', rules);
 		logDebug('Current containerStyles:', containerStyles);
 		const existingRules = rules.split('\n').filter(line => line.trim() !== '');
 		logDebug('Existing rules array:', existingRules);
@@ -346,7 +346,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 		// Add new rule
 		existingRules.push(newRule);
 		const updatedRules = existingRules.join('\n');
-		logDebug('Updated rules before saving:', updatedRules);
+		logDebug('Updated rules before saving:\n', updatedRules);
 
 		const saveData = { rules: updatedRules };
 		
@@ -363,7 +363,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 		// Verify the save worked
         if (DEBUG) {
 			const { rules: savedRules, containerStyles: savedStyles } = await browser.storage.local.get(['rules', 'containerStyles']);
-			logDebug('Rules after saving:', savedRules);
+			logDebug('Rules after saving:\n', savedRules);
 			logDebug('Container styles after saving:', savedStyles);
         }
 
@@ -400,7 +400,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 		  // Verify rules after sorting
 		  const { rules: finalRules } = await browser.storage.local.get('rules');
-		  logDebug('Final rules after sorting:', finalRules);
+		  logDebug('Final rules after sorting:\n', finalRules);
 		} catch (sortError) {
 		  console.warn('Rule sorting error:', sortError);
 		}

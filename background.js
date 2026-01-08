@@ -1,4 +1,4 @@
-import { sortRules, extractBaseDomain } from './sorting.js';
+import { sortRules } from './sorting.js';
 
 const DEBUG = true; // Toggle for debug logging
 
@@ -99,82 +99,50 @@ async function updateTabBadge(tabId, isExcluded) {
 // Function to check rules for permanent container
 async function getContainerForDomain(url) {
   try {
-	  const { rules = '', containerStyles = {} } = await browser.storage.local.get(['rules', 'containerStyles']);
-	  const ruleLines = rules.split('\n').filter(line => line.trim() !== '');
-	  logDebug('Loaded ${ruleLines.length} rules:', ruleLines);
-	  
-	  if (ruleLines.length === 0) {
-		logDebug('No rules available');
-		return null;
-	  }
-	  
-	  logDebug('extracting domain');
-	  // Extract domain and base domain from URL
-	  const domain = getDomain(url);
-	  if (!domain) {
-		logDebug('Invalid domain for URL: ${url}');
-		return null;
-	  }
-	  
-	  logDebug(`Extracting base domain for domain: ${domain}`);
-	  const baseDomain = extractBaseDomain(domain); // Use extractBaseDomain from sorting.js
-	  
-	  if (!baseDomain) {
-        logDebug(`Failed to extract base domain for: ${domain}`);
-        return null;
-	  }
-	  
-	  logDebug(`Checking rules for URL: ${url}, domain: ${domain}, baseDomain: ${baseDomain}`);
+    const { rules = '', containerStyles = {} } = await browser.storage.local.get(['rules', 'containerStyles']);
+    const ruleLines = rules.split('\n').filter(line => line.trim() !== '');
+    logDebug(`Loaded ${ruleLines.length} rules:`, ruleLines);
+    
+    if (ruleLines.length === 0) {
+      logDebug('No rules available');
+      return null;
+    }
+    
+    const domain = getDomain(url);
+    if (!domain) {
+      logDebug(`Invalid domain for URL: ${url}`);
+      return null;
+    }
+    
+    logDebug(`Checking rules sequentially for URL: ${url}, domain: ${domain}`);
 
-	  // Find the first rule with a matching base domain
-	  const startIndex = ruleLines.findIndex(line => {
-		const rulePattern = line.split(',')[0].trim();
-		const ruleDomain = rulePattern.includes('/') ? rulePattern.split('/')[0] : rulePattern;
-		return extractBaseDomain(ruleDomain) === baseDomain;
-	  });
+    let rulesChecked = 0;
 
-	  if (startIndex === -1) {
-		logDebug('No rules found for base domain: ${baseDomain}, checked 0 rules out of ${ruleLines.length} total');
-		return null;
-	  }
-	  
-	  logDebug(`Checking rules starting from index: ${startIndex}, rule: ${ruleLines[startIndex]}`);
+    for (const line of ruleLines) {
+      const [rulePattern, containerName] = line.split(',').map(part => part.trim());
+      rulesChecked++;
 
-	  let rulesChecked = 0;
+      if (matchesRule(url, domain, rulePattern)) {
+        logDebug(`Rule ${rulePattern} matched! Using container: ${containerName}, rules checked: ${rulesChecked}`);
+        const identities = await browser.contextualIdentities.query({ name: containerName });
+        if (identities.length > 0) {
+          logDebug(`Found existing container: ${containerName} (${identities[0].cookieStoreId}) for pattern: ${rulePattern}`);
+          return identities[0].cookieStoreId;
+        }
+        // Apply saved styles when creating container
+        const styles = containerStyles[containerName] || { color: 'blue', icon: 'circle' }; 
+        const identity = await browser.contextualIdentities.create({
+          name: containerName,
+          color: styles.color,
+          icon: styles.icon
+        });
+        logDebug(`Created container: ${containerName} (${identity.cookieStoreId}) for pattern: ${rulePattern}`);
+        return identity.cookieStoreId;
+      }
+    }
 
-	  // Iterate from startIndex until we pass the base domain group
-	  for (let i = startIndex; i < ruleLines.length; i++) {
-		const [rulePattern, containerName] = ruleLines[i].split(',').map(part => part.trim());
-
-		// Check if we've passed the base domain group
-		if (!rulePattern.includes(baseDomain)) {
-		  logDebug(`Passed base domain ${baseDomain}, stopping rule check`);
-		  break;
-		}
-
-		rulesChecked++;
-
-		if (matchesRule(url, domain, rulePattern)) {
-		  logDebug(`Rule ${rulePattern} matched! Using container: ${containerName}, rules checkked: ${rulesChecked}`);
-		  const identities = await browser.contextualIdentities.query({ name: containerName });
-		  if (identities.length > 0) {
-			logDebug(`Found existing container: ${containerName} (${identities[0].cookieStoreId}) for pattern: ${rulePattern}`);
-			return identities[0].cookieStoreId;
-		  }
-		  // Apply saved styles when creating container
-		  const styles = containerStyles[containerName] || { color: 'blue', icon: 'circle' }; 
-		  const identity = await browser.contextualIdentities.create({
-			name: containerName,
-			color: styles.color,
-			icon: styles.icon
-		  });
-		  logDebug(`Created container: ${containerName} (${identity.cookieStoreId}) for pattern: ${rulePattern}`);
-		  return identity.cookieStoreId;
-		}
-	  }
-
-	  logDebug(`No rules matched for URL: ${url}, checked ${rulesChecked} rules out of ${ruleLines.length} total`);
-	  return null;
+    logDebug(`No rules matched for URL: ${url}, checked all ${ruleLines.length} rules`);
+    return null;
   } catch (error) {
     console.error(`Error in getContainerForDomain for URL: ${url}`, error);
     return null;
@@ -253,6 +221,9 @@ function matchesRule(url, domain, rulePattern) {
 // Helper function to match domains with wildcard support
 function matchesDomainPattern(domain, pattern) {
   logDebug(`Testing domain pattern: domain=${domain}, pattern=${pattern}`);
+  
+  if (pattern === '*' || pattern === '*.*') return true; // valid global patterns
+  
   // Normalize both domain and pattern by removing www.
   const normalizedDomain = domain.replace(/^www\./, '');
   const normalizedPattern = pattern.replace(/^www\./, '');
@@ -823,7 +794,7 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
 
 // On startup, delete empty temporary containers and start timers for non-empty ones
 (async () => {
-  logDebug('Background script loaded');
+  logDebug('Auto Containers background script loaded');
   
   // Create main context menu with submenu
   browser.contextMenus.create({
