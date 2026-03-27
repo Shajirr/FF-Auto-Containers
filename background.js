@@ -18,8 +18,14 @@ const tabUrls = new Map();
 const tabCookieStoreIds = new Map();
 // Set to track tabs created by the addon
 const addonCreatedTabs = new Set();
-// Set to track tabs excluded from domain isolation
-const excludedTabs = new Set();
+
+// Domain isolation exclusion tracking
+const excludedTabs = new Set(); // all excluded tabs (perm + temp)
+const permanentExclusions = new Set(); // only tabs explicitly excluded via context menu / message (never expire)
+const tabToExclusionTimer = new Map(); // tabId -> timerId (shared across inheritance chain)
+const exclusionGroups = new Map(); // timerId -> Set<tabId> (all tabs sharing the same timer)
+
+const EXCLUSION_TIMER = 60 * 1000; // in ms
 
 const COLORS = ['blue', 'turquoise', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'toolbar'];
 // prettier-ignore
@@ -85,17 +91,81 @@ function getRandomItem(array) {
 }
 
 // Function to update badge for excluded tabs
-async function updateTabBadge(tabId, isExcluded) {
+async function updateTabBadge(tabId) {
   try {
-    if (isExcluded) {
-      await browser.browserAction.setBadgeText({ text: 'EX', tabId: tabId });
-      await browser.browserAction.setBadgeBackgroundColor({ color: '#ff6b35', tabId: tabId });
-    } else {
+    const isExcluded = excludedTabs.has(tabId);
+    if (!isExcluded) {
       await browser.browserAction.setBadgeText({ text: '', tabId: tabId });
+      return;
     }
+
+    const isPermanent = permanentExclusions.has(tabId);
+    const badgeText = 'EX';
+    const badgeColor = isPermanent ? '#ff6b35' : '#ffd700'; // orange = permanent, gold = temporary
+
+    await browser.browserAction.setBadgeText({ text: badgeText, tabId: tabId });
+    await browser.browserAction.setBadgeBackgroundColor({ color: badgeColor, tabId: tabId });
   } catch (error) {
     console.error('Error updating badge for tab', tabId, error);
   }
+}
+
+// Handler for temporary exclusion timer expiration (shared across inheritance chain)
+function handleTempExpiration(timerId) {
+  const group = exclusionGroups.get(timerId);
+  if (!group) return;
+
+  logDebug(`Temporary exclusion timer ${timerId} expired for group of ${group.size} tabs`);
+
+  for (const tabId of [...group]) {
+    // copy to safely modify while iterating
+    excludedTabs.delete(tabId);
+    tabToExclusionTimer.delete(tabId);
+    updateTabBadge(tabId).catch((e) => console.error('Badge update on expire failed:', e));
+  }
+  exclusionGroups.delete(timerId);
+}
+
+// Centralized inheritance logic (temporary, shared timer across chain)
+async function inheritExclusion(newTabId, sourceTabId) {
+  if (excludedTabs.has(newTabId)) {
+    return; // already excluded (prevent duplicate processing)
+  }
+
+  const isSourcePermanent = permanentExclusions.has(sourceTabId);
+  excludedTabs.add(newTabId);
+
+  if (isSourcePermanent) {
+    // Start a new timer for this inheritance chain
+    const timerId = setTimeout(() => {
+      handleTempExpiration(timerId);
+    }, EXCLUSION_TIMER);
+
+    exclusionGroups.set(timerId, new Set([newTabId]));
+    tabToExclusionTimer.set(newTabId, timerId);
+
+    logDebug(
+      `Created new temp exclusion chain for tab ${newTabId} (inherited from permanent tab ${sourceTabId}), timerId=${timerId}`,
+    );
+  } else {
+    // Inherit the same timer from the source temporary tab
+    const sourceTimerId = tabToExclusionTimer.get(sourceTabId);
+    if (sourceTimerId !== undefined && exclusionGroups.has(sourceTimerId)) {
+      exclusionGroups.get(sourceTimerId).add(newTabId);
+      tabToExclusionTimer.set(newTabId, sourceTimerId);
+      logDebug(`Tab ${newTabId} joined existing temp exclusion group (timer ${sourceTimerId}) from tab ${sourceTabId}`);
+    } else {
+      // Fallback (should never happen) - treat as new temporary chain
+      const timerId = setTimeout(() => {
+        handleTempExpiration(timerId);
+      }, EXCLUSION_TIMER);
+      exclusionGroups.set(timerId, new Set([newTabId]));
+      tabToExclusionTimer.set(newTabId, timerId);
+      logDebug(`Warning: source tab ${sourceTabId} had no timer - created new temp chain for tab ${newTabId}`);
+    }
+  }
+
+  await updateTabBadge(newTabId);
 }
 
 // Function to check rules for permanent container
@@ -262,7 +332,7 @@ function matchesDomainPattern(domain, pattern) {
     logDebug(`General wildcard regex: ${regexPattern}`);
   }
   try {
-    const regex = new RegExp(regexPattern, 'i'); // Case insensitive
+    const regex = new RegExp(regexPattern, 'i'); // Case-insensitive
     const result = regex.test(normalizedDomain);
     //logDebug(`Domain pattern test: "${normalizedDomain}" against "${normalizedPattern}" (regex: ${regexPattern}) = ${result}`);
     return result;
@@ -324,7 +394,8 @@ function cancelDeletionTimer(cookieStoreId) {
 }
 
 // Replace a tab with a new one in a temporary or permanent container
-async function replaceTabWithTempContainer(tab, newUrl = null) {
+// targetCookieStoreId: optional pre-resolved container ID; skips getContainerForDomain if provided
+async function replaceTabWithTempContainer(tab, newUrl = null, targetCookieStoreId = null) {
   const originalTabId = tab.id;
   const originalIndex = tab.index;
   const originalUrl = newUrl || (tab.url && tab.url !== 'about:blank' && tab.url !== 'about:newtab' ? tab.url : null);
@@ -343,10 +414,13 @@ async function replaceTabWithTempContainer(tab, newUrl = null) {
     processingTabs.delete(originalTabId);
     return tab;
   }
-  let cookieStoreId = null;
-  const domain = getDomain(originalUrl);
-  if (domain) {
-    cookieStoreId = await getContainerForDomain(originalUrl);
+  // Use pre-resolved container ID from caller if available; avoids a redundant getContainerForDomain call
+  let cookieStoreId = targetCookieStoreId ?? null;
+  if (!cookieStoreId) {
+    const domain = getDomain(originalUrl);
+    if (domain) {
+      cookieStoreId = await getContainerForDomain(originalUrl);
+    }
   }
   if (!cookieStoreId) {
     const tempContainer = await createTempContainer();
@@ -394,7 +468,7 @@ browser.tabs.onActivated.addListener(async (activeInfo) => {
     );
 
     // Update badge for the activated tab
-    await updateTabBadge(activeInfo.tabId, excludedTabs.has(activeInfo.tabId));
+    await updateTabBadge(activeInfo.tabId);
   } else {
     logDebug(`Active tab updated: ${activeInfo.tabId}, tab info unavailable`);
   }
@@ -429,9 +503,9 @@ browser.tabs.onCreated.addListener(async (tab) => {
   // If the opener tab is excluded from domain isolation, inherit that exclusion.
   // This preserves container context across multi-domain flows (e.g. payment redirects)
   // where the next stage opens in a new tab and must stay in the same container.
+  //Inheritance is temporary and shares timer with the source chain.
   if (tab.openerTabId && excludedTabs.has(tab.openerTabId)) {
-    excludedTabs.add(tab.id);
-    await updateTabBadge(tab.id, true);
+    await inheritExclusion(tab.id, tab.openerTabId);
     logDebug(`Tab ${tab.id} inherited domain isolation exclusion from opener tab ${tab.openerTabId}`);
     // Don't return - handleNewTab will skip processing this tab due to the exclusion,
     // and Firefox naturally keeps the new tab in the opener's container
@@ -533,7 +607,20 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
   // Update badge when page loading completes or URL changes
   if ((changeInfo.status === 'complete' || changeInfo.url) && excludedTabs.has(tabId)) {
-    await updateTabBadge(tabId, true);
+    await updateTabBadge(tabId);
+  }
+
+  // Fallback container replacement when onBeforeNavigate did not trigger
+  // (covers cases where navigation happens after temp exclusion timer expires)
+  if (
+    changeInfo.url &&
+    !processingTabs.has(tabId) &&
+    !addonCreatedTabs.has(tabId) &&
+    !excludedTabs.has(tabId) &&
+    !pendingTabs.has(tabId)
+  ) {
+    logDebug(`onUpdated URL change fallback for tab ${tabId} - checking container`);
+    await handleContainerChangeOnNavigation(tabId, changeInfo.url);
   }
 
   if (processingTabs.has(tabId)) {
@@ -582,18 +669,6 @@ browser.webNavigation.onBeforeNavigate.addListener(
 
     const tabId = details.tabId;
 
-    // Inherit exclusion from opener if not already excluded.
-    if (!excludedTabs.has(tabId)) {
-      const newTab = await browser.tabs.get(tabId).catch(() => null);
-      if (newTab && newTab.openerTabId && excludedTabs.has(newTab.openerTabId)) {
-        excludedTabs.add(tabId);
-        await updateTabBadge(tabId, true);
-        logDebug(
-          `Tab ${tabId} inherited domain isolation exclusion from opener tab ${newTab.openerTabId} (via onBeforeNavigate)`,
-        );
-      }
-    }
-
     // Check if tab is excluded from domain isolation
     if (excludedTabs.has(tabId)) {
       logDebug(`Tab ${tabId} is excluded from domain isolation, skipping navigation handling`);
@@ -601,126 +676,41 @@ browser.webNavigation.onBeforeNavigate.addListener(
       tabUrls.set(tabId, newUrl); // Still update stored URL for tracking
 
       // Update badge to ensure it shows after navigation
-      await updateTabBadge(tabId, true);
+      await updateTabBadge(tabId);
       return;
     }
 
-    logDebug(`onBeforeNavigate triggered - tabId: ${tabId}, url: ${details.url}`);
-
-    if (addonCreatedTabs.has(tabId) || pendingTabs.has(tabId)) {
-      logDebug(`Skipping tab ${tabId} as it's addon-created or pending`);
-      return;
-    }
-
-    const newUrl = details.url;
-    const newDomain = getDomain(newUrl);
-    const tab = await browser.tabs.get(tabId);
-    // Get the current domain from stored URL or tab URL
-    const storedUrl = tabUrls.get(tabId);
-    const currentUrl = storedUrl || tab.url;
-    const currentDomain = getDomain(currentUrl);
-
-    logDebug(`Domain comparison - Current: ${currentDomain} (from ${currentUrl}), New: ${newDomain} (from ${newUrl})`);
-    const currentContainer = tab.cookieStoreId
-      ? await browser.contextualIdentities.get(tab.cookieStoreId).catch(() => null)
-      : null;
-    const isTempContainer = currentContainer && /^tmp_\d+$/.test(currentContainer.name);
-    // Check if the tab is in the default container or needs a different container
-    if (newDomain) {
-      const targetContainerId = await getContainerForDomain(newUrl);
-      const currentTargetContainerId = currentDomain ? await getContainerForDomain(currentUrl) : null;
-      // Check opener for same-domain navigation
-      if (tab.openerTabId) {
-        const openerTab = await browser.tabs.get(tab.openerTabId).catch(() => null);
-        if (openerTab) {
-          const openerDomain = getDomain(openerTab.url);
-          const openerContainerId = openerTab.cookieStoreId;
-          if (newDomain === openerDomain && openerContainerId && openerContainerId !== 'firefox-default') {
-            if (tab.cookieStoreId !== openerContainerId) {
-              logDebug(
-                `Replacing tab ${tabId} with opener's container for same domain ${newDomain}: ${openerContainerId}`,
-              );
-              processingTabs.add(tabId);
-              try {
-                await replaceTabWithTempContainer(tab, newUrl);
-              } finally {
-                processingTabs.delete(tabId);
-              }
-            } else {
-              logDebug(
-                `Tab ${tabId} already in correct opener container for domain ${newDomain}: ${tab.cookieStoreId}`,
-              );
-              if (isTempContainer) {
-                cancelDeletionTimer(tab.cookieStoreId); // Cancel existing timer
-                startDeletionTimer(tab.cookieStoreId); // Start new timer
-              }
-            }
-            tabUrls.set(tabId, newUrl); // Update stored URL
-            return;
-          }
-        }
-      }
-
-      // Determine if we need to replace the tab
-      let shouldReplace = false;
-      let reason = '';
-      // Case 1: Tab is in default container but needs a specific container
-      if (tab.cookieStoreId === 'firefox-default' && targetContainerId) {
-        shouldReplace = true;
-        reason = `moving from default container to ${targetContainerId}`;
-      }
-      // Case 2: Tab is in default container and domain changed (needs temp container)
-      else if (tab.cookieStoreId === 'firefox-default' && newDomain !== currentDomain) {
-        shouldReplace = true;
-        reason = `moving from default container to temp container for domain change`;
-      }
-      // Case 3: Domain changed and containers should be different
-      else if (newDomain !== currentDomain) {
-        // Only replace if the target containers are actually different
-        if (targetContainerId !== currentTargetContainerId) {
-          shouldReplace = true;
-          reason = `domain change requiring different container: ${currentTargetContainerId} -> ${targetContainerId}`;
-        } else if (!targetContainerId && !currentTargetContainerId) {
-          // Both domains need temp containers - create new one for new domain
-          shouldReplace = true;
-          reason = `domain change requiring new temp container`;
-        }
-      }
-      // Case 4: Same domain but wrong container (shouldn't happen but safety check)
-      else if (newDomain === currentDomain && targetContainerId && tab.cookieStoreId !== targetContainerId) {
-        shouldReplace = true;
-        reason = `same domain but wrong container: ${tab.cookieStoreId} -> ${targetContainerId}`;
-      }
-      if (shouldReplace) {
-        logDebug(`Replacing tab ${tabId} for domain ${newDomain} (was ${currentDomain}): ${reason}`);
-        processingTabs.add(tabId);
-        try {
-          await replaceTabWithTempContainer(tab, newUrl);
-        } finally {
-          processingTabs.delete(tabId);
-        }
-      } else {
-        logDebug(
-          `Tab ${tabId} staying in current container for navigation from ${currentDomain} to ${newDomain}: ${tab.cookieStoreId}`,
-        );
-        if (isTempContainer) {
-          cancelDeletionTimer(tab.cookieStoreId); // Cancel existing timer
-          startDeletionTimer(tab.cookieStoreId); // Start new timer
-        }
-      }
-      tabUrls.set(tabId, newUrl); // Always update the stored URL
-    }
+    // Call shared container logic
+    await handleContainerChangeOnNavigation(tabId, details.url);
   },
   { url: [{ schemes: ['http', 'https'] }] },
 );
 
 // Handle tab removal to clean up
-browser.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
+browser.tabs.onRemoved.addListener(async (tabId) => {
   tabUrls.delete(tabId);
   pendingTabs.delete(tabId);
   addonCreatedTabs.delete(tabId);
   tabProcessingCount.delete(tabId);
-  excludedTabs.delete(tabId); // Clean up exclusion tracking
+
+  // // Clean up exclusion tracking for both permanent and temporary exclusions
+  const wasPermanent = permanentExclusions.has(tabId);
+  excludedTabs.delete(tabId);
+  permanentExclusions.delete(tabId);
+
+  if (tabToExclusionTimer.has(tabId)) {
+    const timerId = tabToExclusionTimer.get(tabId);
+    const group = exclusionGroups.get(timerId);
+    if (group) {
+      group.delete(tabId);
+      if (group.size === 0) {
+        clearTimeout(timerId);
+        exclusionGroups.delete(timerId);
+        logDebug(`Cleared empty temp exclusion timer ${timerId} (last tab removed)`);
+      }
+    }
+    tabToExclusionTimer.delete(tabId);
+  }
 
   // Use the tracked cookieStoreId - browser.tabs.get() on a removed tab always returns null
   const cookieStoreId = tabCookieStoreIds.get(tabId);
@@ -735,7 +725,132 @@ browser.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
       }
     }
   }
+
+  logDebug(`Tab ${tabId} removed${wasPermanent ? ' (was permanent exclusion)' : ''}`);
 });
+
+// Centralized function that decides whether to replace the tab when domain changes
+// Called from onBeforeNavigate (preferred) and as fallback from onUpdated
+async function handleContainerChangeOnNavigation(tabId, newUrl) {
+  if (!newUrl) return;
+
+  logDebug(`handleContainerChangeOnNavigation - tabId: ${tabId}, newUrl: ${newUrl}`);
+
+  if (addonCreatedTabs.has(tabId) || pendingTabs.has(tabId)) {
+    logDebug(`Skipping tab ${tabId} as it's addon-created or pending`);
+    return;
+  }
+
+  const newDomain = getDomain(newUrl);
+  if (!newDomain) return;
+
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!tab) return;
+
+  // Get the current domain from stored URL or tab URL
+  const storedUrl = tabUrls.get(tabId);
+  const currentUrl = storedUrl || tab.url;
+  const currentDomain = getDomain(currentUrl);
+
+  logDebug(`Domain comparison - Current: ${currentDomain} (from ${currentUrl}), New: ${newDomain} (from ${newUrl})`);
+
+  const currentContainer = tab.cookieStoreId
+    ? await browser.contextualIdentities.get(tab.cookieStoreId).catch(() => null)
+    : null;
+  const isTempContainer = currentContainer && /^tmp_\d+$/.test(currentContainer.name);
+
+  // Check if the tab is in the default container or needs a different container
+  if (newDomain) {
+    const targetContainerId = await getContainerForDomain(newUrl);
+    // Check opener for same-domain navigation.
+    // Skip if a permanent container rule exists and the opener isn't in it — the rule takes precedence.
+    if (tab.openerTabId) {
+      const openerTab = await browser.tabs.get(tab.openerTabId).catch(() => null);
+      if (openerTab) {
+        const openerDomain = getDomain(openerTab.url);
+        const openerContainerId = openerTab.cookieStoreId;
+        const openerConflictsWithRule = targetContainerId && openerContainerId !== targetContainerId;
+        if (
+          newDomain === openerDomain &&
+          openerContainerId &&
+          openerContainerId !== 'firefox-default' &&
+          !openerConflictsWithRule
+        ) {
+          if (tab.cookieStoreId !== openerContainerId) {
+            logDebug(
+              `Replacing tab ${tabId} with opener's container for same domain ${newDomain}: ${openerContainerId}`,
+            );
+            processingTabs.add(tabId);
+            try {
+              await replaceTabWithTempContainer(tab, newUrl, openerContainerId);
+            } finally {
+              processingTabs.delete(tabId);
+            }
+          } else {
+            logDebug(`Tab ${tabId} already in correct opener container for domain ${newDomain}: ${tab.cookieStoreId}`);
+            if (isTempContainer) {
+              cancelDeletionTimer(tab.cookieStoreId); // Cancel existing timer
+              startDeletionTimer(tab.cookieStoreId); // Start new timer
+            }
+          }
+          tabUrls.set(tabId, newUrl); // Update stored URL
+          return;
+        }
+      }
+    }
+
+    // Determine if we need to replace the tab
+    let shouldReplace = false;
+    let reason = '';
+    // Case 1: Tab is in default container but needs a specific container
+    if (tab.cookieStoreId === 'firefox-default' && targetContainerId) {
+      shouldReplace = true;
+      reason = `moving from default container to ${targetContainerId}`;
+    }
+    // Case 2: Tab is in default container and domain changed (needs temp container)
+    else if (tab.cookieStoreId === 'firefox-default' && newDomain !== currentDomain) {
+      shouldReplace = true;
+      reason = `moving from default container to temp container for domain change`;
+    }
+    // Case 3: Domain changed and containers should be different
+    else if (newDomain !== currentDomain) {
+      // Resolve current domain's container for comparison
+      const currentTargetContainerId = currentDomain ? await getContainerForDomain(currentUrl) : null;
+      // Only replace if the target containers are actually different
+      if (targetContainerId !== currentTargetContainerId) {
+        shouldReplace = true;
+        reason = `domain change requiring different container: ${currentTargetContainerId} -> ${targetContainerId}`;
+      } else if (!targetContainerId && !currentTargetContainerId) {
+        // Both domains need temp containers - create new one for new domain
+        shouldReplace = true;
+        reason = `domain change requiring new temp container`;
+      }
+    }
+    // Case 4: Same domain but wrong container (shouldn't happen but safety check)
+    else if (newDomain === currentDomain && targetContainerId && tab.cookieStoreId !== targetContainerId) {
+      shouldReplace = true;
+      reason = `same domain but wrong container: ${tab.cookieStoreId} -> ${targetContainerId}`;
+    }
+    if (shouldReplace) {
+      logDebug(`Replacing tab ${tabId} for domain ${newDomain} (was ${currentDomain}): ${reason}`);
+      processingTabs.add(tabId);
+      try {
+        await replaceTabWithTempContainer(tab, newUrl, targetContainerId);
+      } finally {
+        processingTabs.delete(tabId);
+      }
+    } else {
+      logDebug(
+        `Tab ${tabId} staying in current container for navigation from ${currentDomain} to ${newDomain}: ${tab.cookieStoreId}`,
+      );
+      if (isTempContainer) {
+        cancelDeletionTimer(tab.cookieStoreId); // Cancel existing timer
+        startDeletionTimer(tab.cookieStoreId); // Start new timer
+      }
+    }
+    tabUrls.set(tabId, newUrl); // Always update the stored URL
+  }
+}
 
 // Handle new tabs with available URL
 async function handleNewTab(tab) {
@@ -822,16 +937,33 @@ async function handleNewTab(tab) {
 }
 
 // Listen for messages from options/popup to sort rules when they're saved
-browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
+browser.runtime.onMessage.addListener(async (message) => {
   try {
     logDebug('Received message:', message);
 
     if (message.action === 'excludeTab') {
       const tabId = message.tabId;
-      if (!excludedTabs.has(tabId)) {
+      if (!excludedTabs.has(tabId) || !permanentExclusions.has(tabId)) {
+        // Make sure it becomes / stays permanent
         excludedTabs.add(tabId);
-        await updateTabBadge(tabId, true);
-        logDebug(`Tab ${tabId} added to domain isolation exclusions`);
+        permanentExclusions.add(tabId);
+
+        // If it was previously temporary, remove it from any temp group
+        if (tabToExclusionTimer.has(tabId)) {
+          const timerId = tabToExclusionTimer.get(tabId);
+          const group = exclusionGroups.get(timerId);
+          if (group) {
+            group.delete(tabId);
+            if (group.size === 0) {
+              clearTimeout(timerId);
+              exclusionGroups.delete(timerId);
+            }
+          }
+          tabToExclusionTimer.delete(tabId);
+        }
+
+        await updateTabBadge(tabId);
+        logDebug(`Tab ${tabId} added to permanent domain isolation exclusions`);
       }
       return {
         success: true,
@@ -841,7 +973,23 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       const tabId = message.tabId;
       if (excludedTabs.has(tabId)) {
         excludedTabs.delete(tabId);
-        await updateTabBadge(tabId, false);
+        permanentExclusions.delete(tabId);
+
+        // Clean up temporary timer association if any
+        if (tabToExclusionTimer.has(tabId)) {
+          const timerId = tabToExclusionTimer.get(tabId);
+          const group = exclusionGroups.get(timerId);
+          if (group) {
+            group.delete(tabId);
+            if (group.size === 0) {
+              clearTimeout(timerId);
+              exclusionGroups.delete(timerId);
+            }
+          }
+          tabToExclusionTimer.delete(tabId);
+        }
+
+        await updateTabBadge(tabId);
         logDebug(`Tab ${tabId} removed from domain isolation exclusions`);
       }
       return {
@@ -909,15 +1057,46 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
 // Context menu click handler
 browser.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === 'exclude-from-isolation') {
-    if (!excludedTabs.has(tab.id)) {
+    if (!excludedTabs.has(tab.id) || !permanentExclusions.has(tab.id)) {
       excludedTabs.add(tab.id);
-      await updateTabBadge(tab.id, true);
-      logDebug(`Tab ${tab.id} added to domain isolation exclusions`);
+      permanentExclusions.add(tab.id);
+
+      // If it was previously temporary, remove it from any temp group
+      if (tabToExclusionTimer.has(tab.id)) {
+        const timerId = tabToExclusionTimer.get(tab.id);
+        const group = exclusionGroups.get(timerId);
+        if (group) {
+          group.delete(tab.id);
+          if (group.size === 0) {
+            clearTimeout(timerId);
+            exclusionGroups.delete(timerId);
+          }
+        }
+        tabToExclusionTimer.delete(tab.id);
+      }
+
+      await updateTabBadge(tab.id);
+      logDebug(`Tab ${tab.id} added to permanent domain isolation exclusions`);
     }
   } else if (info.menuItemId === 'remove-from-exclusions') {
     if (excludedTabs.has(tab.id)) {
       excludedTabs.delete(tab.id);
-      await updateTabBadge(tab.id, false);
+      permanentExclusions.delete(tab.id);
+
+      if (tabToExclusionTimer.has(tab.id)) {
+        const timerId = tabToExclusionTimer.get(tab.id);
+        const group = exclusionGroups.get(timerId);
+        if (group) {
+          group.delete(tab.id);
+          if (group.size === 0) {
+            clearTimeout(timerId);
+            exclusionGroups.delete(timerId);
+          }
+        }
+        tabToExclusionTimer.delete(tab.id);
+      }
+
+      await updateTabBadge(tab.id);
       logDebug(`Tab ${tab.id} removed from domain isolation exclusions`);
     }
   }
