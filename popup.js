@@ -302,8 +302,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // Validate container name
-    if (!/^[a-zA-Z0-9\s_-]+$/.test(containerName)) {
-      showMessage('Container name can only contain letters, numbers, spaces, hyphens, or underscores', 'error');
+    if (!/^[\x20-\x7E]+$/.test(containerName)) {
+      showMessage('Container name can only contain printable characters and spaces', 'error');
       return;
     }
 
@@ -319,7 +319,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const newRule = `${pattern}, ${containerName}`;
       logDebug('New rule to add:', newRule);
       const ruleExists = existingRules.some((rule) => {
-        const [existingPattern] = rule.split(',').map((part) => part.trim());
+        const existingPattern = rule.slice(0, rule.indexOf(',')).trim();
         return existingPattern === pattern;
       });
 
@@ -508,7 +508,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       // Find rules that use the same container
       const relatedRules = ruleLines.filter((line) => {
-        const [, containerName] = line.split(',').map((part) => part.trim());
+        const commaIdx = line.indexOf(',');
+        const containerName = commaIdx >= 0 ? line.slice(commaIdx + 1).trim() : '';
         return containerName === currentContainer.name;
       });
 
@@ -597,20 +598,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       // Check basic format
-      if (!ruleText.includes(',') || ruleText.split(',').length !== 2) {
+      if (!ruleText.includes(',')) {
         input.classList.add('error');
         hasError = true;
         return;
       }
 
       // Check comma format
-      if (!/^[^,\s]+,\s+[^,\s]+$/.test(ruleText)) {
+      if (!/^[^,\s]+,\s+.+$/.test(ruleText)) {
         input.classList.add('error');
         hasError = true;
         return;
       }
 
-      const [pattern, containerName] = ruleText.split(',').map((part) => part.trim());
+      const commaIdx = ruleText.indexOf(',');
+      const pattern = ruleText.slice(0, commaIdx).trim();
+      const containerName = ruleText.slice(commaIdx + 1).trim();
 
       // Validate pattern
       const isDomainPattern =
@@ -624,7 +627,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       // Validate container name
-      if (!/^[a-zA-Z0-9\s_-]+$/.test(containerName)) {
+      if (!/^[\x20-\x7E]+$/.test(containerName)) {
         input.classList.add('error');
         hasError = true;
         return;

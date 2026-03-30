@@ -160,7 +160,7 @@
     Format: 
     <code>Pattern, Container name</code><br>
 	One rule per line.<br>
-  
+
 <details id="rules-instructions">
     <summary>Show rule instructions / examples</summary>
 
@@ -168,7 +168,7 @@
     <br>
     <br>
     <strong>URL pattern examples:</strong><br>
-    <code>google.com, GL</code> - matches google.com URLs, except for subdomains.<br> 
+    <code>google.com, GL</code> - matches google.com URLs, except for subdomains.<br>
 	Won't match goole.co.uk, google.fr, etc.<br>
     <code>google.*, GL</code> - matches google.com, goole.co.uk, google.fr, etc.<br>
     <code>google.com/search, GoogleSearch</code> - matches google.com Search pages only<br>
@@ -177,8 +177,15 @@
     <code>*.google.com, GL</code> - matches Google subdomains like mail.google.com or docs.google.com, will not match google.com<br>
     <code>*.google.*, GL</code> - matches all Google subdomains with any top-level domains, like docs.google.com or mail.google.co.uk<br>
     <br>
-    <strong>Rule priority:</strong> More specific patterns are checked first.
-    </p>
+    <strong>Rule priority:</strong> More specific patterns are checked first.<br>
+    <br>
+      <strong>Special rules / reserved container names:</strong><br><br>
+      <strong>#Default</strong> - matched address will always open is the default Firefox container (same as no container)<br>
+      <strong>#Ignore</strong> - addon does nothing, so matched address will open in the same container (or no container) as the active tab.<br>
+      <br><strong>Examples:</strong><br>
+      <code>example.com, #Default</code> - example.com will open in the default Firefox container (same as no container)<br>
+      <code>example.com, #Ignore</code> - example.com will open in the same container as the active tab.
+      If you are currently on a tab in a container named "GL", and you click a link to "example.com", it will open in the "GL" container.<br><br>
   </details>
   
 	<textarea
