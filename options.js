@@ -1,14 +1,18 @@
-const DEBUG = true; // Toggle for debug logging
+let DEBUG = false; // default fallback
 
 function logDebug(...args) {
   if (DEBUG) console.log(...args);
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  const result = await browser.storage.local.get({ DEBUG: false });
+  DEBUG = result.DEBUG;
+
   logDebug('Options page loaded');
 
   const containerRules = document.getElementById('containerRules');
   const showNotifications = document.getElementById('showNotifications');
+  const debugLogging = document.getElementById('debugLogging');
   const saveButton = document.getElementById('saveButton');
   const saveMessage = document.getElementById('save-message');
 
@@ -19,7 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const randomIconCheckbox = document.getElementById('randomIcon');
 
   // Check if DOM elements exist
-  if (!containerRules || !showNotifications || !saveButton || !saveMessage) {
+  if (!containerRules || !showNotifications || !debugLogging || !saveButton || !saveMessage) {
     console.error('One or more DOM elements not found');
     saveMessage.textContent = 'Error: Options page elements not found';
     saveMessage.classList.add('error', 'visible');
@@ -157,9 +161,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   containerRules.value = rules;
   showNotifications.checked = notifications;
+  debugLogging.checked = DEBUG;
 
   // Listen for storage changes to update the UI
   browser.storage.onChanged.addListener(async (changes, namespace) => {
+    if (namespace === 'local' && changes.DEBUG) {
+      DEBUG = changes.DEBUG.newValue ?? false;
+    }
     if (namespace === 'local' && changes.rules) {
       logDebug('Rules changed externally, updating display');
       containerRules.value = changes.rules.newValue || '';
@@ -267,6 +275,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       await browser.storage.local.set({
         rules: rulesText,
         notifications: showNotifications.checked,
+        DEBUG: debugLogging.checked,
         tempContainerStyle: {
           color: randomColorCheckbox.checked ? null : selectedColor,
           icon: randomIconCheckbox.checked ? null : selectedIcon,

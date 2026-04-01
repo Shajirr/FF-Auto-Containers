@@ -1,8 +1,15 @@
-const DEBUG = true; // Toggle for debug logging
+let DEBUG = false; // default fallback
 
 function logDebug(...args) {
   if (DEBUG) console.log(...args);
 }
+
+// Listen for storage changes
+browser.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === 'local' && changes.DEBUG) {
+    DEBUG = changes.DEBUG.newValue ?? false;
+  }
+});
 
 // Firefox contextual identity colors and icons
 const COLORS = ['blue', 'turquoise', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'toolbar'];
@@ -26,6 +33,9 @@ async function refreshUrlBar(currentTab) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  const result = await browser.storage.local.get({ DEBUG: false });
+  DEBUG = result.DEBUG;
+
   // Get current tab info
   const tabs = await browser.tabs.query({ active: true, currentWindow: true });
   const currentTab = tabs[0];
@@ -328,7 +338,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
       }
 
-      // If 'convert temp container is selected, check for container name conflicts
+      // If convert temp container is selected, check for container name conflicts
       let targetContainerId = null;
       let shouldSaveStyles = false;
       if (convertTempContainer) {

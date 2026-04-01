@@ -1,6 +1,6 @@
 import { sortRules } from './sorting.js';
 
-const DEBUG = true; // Toggle for debug logging
+let DEBUG = false;
 
 function logDebug(...args) {
   if (DEBUG) console.log(...args);
@@ -326,8 +326,6 @@ function matchesRule(url, domain, rulePattern) {
 
 // Helper function to match domains with wildcard support
 function matchesDomainPattern(domain, pattern) {
-  logDebug(`Testing domain pattern: domain=${domain}, pattern=${pattern}`);
-
   if (pattern === '*' || pattern === '*.*') return true; // valid global patterns
 
   // Normalize both domain and pattern by removing www.
@@ -336,7 +334,10 @@ function matchesDomainPattern(domain, pattern) {
   // No wildcards - exact match
   if (!normalizedPattern.includes('*')) {
     const result = normalizedDomain === normalizedPattern;
-    logDebug(`Exact match test: ${normalizedDomain} === ${normalizedPattern} = ${result}`);
+    if (result === true) {
+      logDebug(`Testing domain pattern: domain=${domain}, pattern=${pattern}`);
+      logDebug(`Exact match test: ${normalizedDomain} === ${normalizedPattern} = ${result}`);
+    }
     return result;
   }
   // Handle wildcard patterns
@@ -347,12 +348,12 @@ function matchesDomainPattern(domain, pattern) {
     // Subdomain pattern like "*.google.com" - matches subdomains
     const baseDomain = normalizedPattern.substring(2); // Remove "*."
     regexPattern = `^(${baseDomain.replace(/[.+?^${}()|[\]\\]/g, '\\$&')}|.*\\.${baseDomain.replace(/[.+?^${}()|[\]\\]/g, '\\$&')})$`;
-    logDebug(`Subdomain regex: ${regexPattern}`);
+    //logDebug(`Subdomain regex: ${regexPattern}`);
   } else if (normalizedPattern.endsWith('.*')) {
     // Domain family pattern like "google.*" - matches google.<tld> but not subdomains
     const baseDomain = normalizedPattern.substring(0, normalizedPattern.length - 2); // Remove ".*"
     regexPattern = `^${baseDomain.replace(/[.+?^${}()|[\]\\]/g, '\\$&')}\\.[a-zA-Z]{2,}$`;
-    logDebug(`Domain family regex: ${regexPattern}`);
+    //logDebug(`Domain family regex: ${regexPattern}`);
   } else {
     // General wildcard pattern - convert * to .*
     regexPattern = normalizedPattern
@@ -425,47 +426,68 @@ function cancelDeletionTimer(cookieStoreId) {
 
 // Replace a tab with a new one in a temporary or permanent container
 // targetCookieStoreId: optional pre-resolved container ID; skips getContainerForDomain if provided
-async function replaceTabWithTempContainer(tab, newUrl = null, targetCookieStoreId = null) {
+async function replaceTab(tab, newUrl = null, targetCookieStoreId = null) {
   const originalTabId = tab.id;
-  const originalIndex = tab.index;
-  const originalUrl = newUrl || (tab.url && tab.url !== 'about:blank' && tab.url !== 'about:newtab' ? tab.url : null);
-  const windowId = tab.windowId;
-  const container = tab.cookieStoreId
-    ? await browser.contextualIdentities.get(tab.cookieStoreId).catch(() => null)
-    : null;
-  const containerName = container ? container.name : 'unknown';
-  const isTempContainer = container && /^tmp_\d+$/.test(container.name);
-  logDebug(
-    `replaceTabWithTempContainer: Tab ${tab.id}, URL: ${originalUrl}, container: ${containerName} (${tab.cookieStoreId}), isTemp: ${isTempContainer}`,
-  );
-  // Don't create containers for blank URLs unless explicitly requested
-  if (!originalUrl || originalUrl === 'about:blank' || originalUrl === 'about:newtab') {
-    logDebug(`Skipping container creation for blank URL: ${originalUrl}`);
+
+  // Resolve the target URL first so it can be validated
+  const targetUrl = newUrl || (tab.url && !['about:blank', 'about:newtab'].includes(tab.url) ? tab.url : null);
+
+  // Comprehensive Privileged/Invalid URL check.
+  // Check targetUrl here because that is what browser.tabs.create will eventually use.
+  if (
+    !targetUrl ||
+    targetUrl.startsWith('about:') ||
+    targetUrl.startsWith('chrome:') ||
+    targetUrl.startsWith('resource:')
+  ) {
+    logDebug(`Skipping replaceTab for blank or privileged URL: ${targetUrl || 'No URL'}`);
+    // Clean up the lock on early return
     processingTabs.delete(originalTabId);
     return tab;
   }
-  // Use pre-resolved container ID from caller if available; avoids a redundant getContainerForDomain call
-  let cookieStoreId = targetCookieStoreId ?? null;
+
+  const originalIndex = tab.index;
+  const windowId = tab.windowId;
+
+  // Logging setup (for debugging)
+  const container = tab.cookieStoreId
+    ? await browser.contextualIdentities.get(tab.cookieStoreId).catch(() => null)
+    : null;
+  const containerName = container ? container.name : tab.cookieStoreId === 'firefox-default' ? 'Default' : 'unknown';
+  const isTempContainer = container && /^tmp_\d+$/.test(container.name);
+  logDebug(
+    `replaceTab: Tab ${originalTabId}, URL: ${targetUrl}, container: ${containerName} (${tab.cookieStoreId}), isTemp: ${isTempContainer}`,
+  );
+
+  // Resolve the CookieStoreId
+  let cookieStoreId = targetCookieStoreId;
+
   if (!cookieStoreId) {
-    const domain = getDomain(originalUrl);
+    const domain = getDomain(targetUrl);
     if (domain) {
-      cookieStoreId = await getContainerForDomain(originalUrl);
+      cookieStoreId = await getContainerForDomain(targetUrl);
     }
   }
+
   if (!cookieStoreId) {
+    logDebug(`No rule found for ${targetUrl}. Creating temporary isolation container.`);
     const tempContainer = await createTempContainer();
     cookieStoreId = tempContainer.cookieStoreId;
   }
+
   try {
     const newTab = await browser.tabs.create({
-      url: originalUrl,
+      url: targetUrl,
       cookieStoreId: cookieStoreId,
       index: originalIndex,
       windowId: windowId,
       active: tab.active,
     });
+
     addonCreatedTabs.add(newTab.id);
     logDebug(`Created new tab at index: ${originalIndex}, new tab id: ${newTab.id}, container: ${cookieStoreId}`);
+
+    // Remove original tab
     try {
       await browser.tabs.get(originalTabId);
       await browser.tabs.remove(originalTabId);
@@ -473,17 +495,27 @@ async function replaceTabWithTempContainer(tab, newUrl = null, targetCookieStore
     } catch (error) {
       console.warn(`Original tab ${originalTabId} no longer exists, skipping removal`);
     }
-    if (originalUrl) {
-      tabUrls.set(newTab.id, originalUrl);
+
+    if (targetUrl) {
+      tabUrls.set(newTab.id, targetUrl);
     }
     return newTab;
   } catch (error) {
-    console.error(`Error in replaceTabWithTempContainer for tab ${originalTabId}:`, error);
+    console.error(`Error in replaceTab for tab ${originalTabId}:`, error);
     throw error;
   } finally {
+    // Ensure the lock is always released
     processingTabs.delete(originalTabId);
   }
 }
+
+// Listen for storage changes
+browser.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === 'local' && changes.DEBUG) {
+    DEBUG = changes.DEBUG.newValue ?? false;
+    logDebug('Auto Containers: Debug mode changed to:', DEBUG);
+  }
+});
 
 // Track active tab to filter user-initiated actions
 browser.tabs.onActivated.addListener(async (activeInfo) => {
@@ -749,7 +781,15 @@ browser.tabs.onRemoved.addListener(async (tabId) => {
 // Centralized function that decides whether to replace the tab when domain changes
 // Called from onBeforeNavigate (preferred) and as fallback from onUpdated
 async function handleContainerChangeOnNavigation(tabId, newUrl) {
+  // Skip empty URLs
   if (!newUrl) return;
+
+  // Skip all internal Firefox pages (about:, chrome:, resource:)
+  // These cannot be moved between containers anyway.
+  if (newUrl.startsWith('about:') || newUrl.startsWith('chrome:') || newUrl.startsWith('resource:')) {
+    logDebug(`Ignoring privileged URL: ${newUrl}`);
+    return;
+  }
 
   logDebug(`handleContainerChangeOnNavigation - tabId: ${tabId}, newUrl: ${newUrl}`);
 
@@ -818,7 +858,7 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
             logDebug(
               `Replacing tab ${tabId} with opener's container for same domain ${newDomain}: ${openerContainerId}`,
             );
-            await replaceTabWithTempContainer(tab, newUrl, openerContainerId);
+            await replaceTab(tab, newUrl, openerContainerId);
             return; // Return early: don't update tabUrls for a dead tab
           } else {
             logDebug(`Tab ${tabId} already in correct opener container for domain ${newDomain}: ${tab.cookieStoreId}`);
@@ -838,7 +878,15 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
     let reason = '';
 
     const isCurrentlyDefault = tab.cookieStoreId === 'firefox-default';
-    const isTargetDefault = targetContainerId === 'firefox-default';
+    const isTargetDefault = !targetContainerId || targetContainerId === 'firefox-default';
+
+    // If the tab is already in the container specified by the rules (or default),
+    // don't replace it, even if currentDomain is unknown (session restore).
+    if (targetContainerId && tab.cookieStoreId === targetContainerId) {
+      logDebug(`Tab ${tabId} already satisfies rule for ${newDomain} (${targetContainerId}). Skipping.`);
+      tabUrls.set(tabId, newUrl);
+      return;
+    }
 
     if (isCurrentlyDefault) {
       // Tab is currently in the Default Container
@@ -848,24 +896,39 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
         reason = `moving from default container to specific container: ${targetContainerId}`;
       } else if (!targetContainerId && newDomain !== currentDomain) {
         // Case 2: No rule found, but domain changed -> isolate in new temporary container
-        shouldReplace = true;
-        reason = `moving from default container to temp container for domain change`;
+        if (currentDomain !== null) {
+          shouldReplace = true;
+          reason = `moving from default container to temp container for domain change`;
+        }
       }
       // If isTargetDefault is true, do nothing (stay in default)
     } else {
       // Tab is currently in a Container (Temporary or Permanent)
       // Case 3: Domain changed and containers should be different
       if (newDomain !== currentDomain) {
-        // Resolve current domain's container for comparison
-        const currentTargetContainerId = currentDomain ? await getContainerForDomain(currentUrl) : null;
-        // Only replace if the target containers are actually different
-        if (targetContainerId !== currentTargetContainerId) {
-          shouldReplace = true;
-          reason = `domain change requiring different container: ${currentTargetContainerId} -> ${targetContainerId}`;
-        } else if (!targetContainerId && !currentTargetContainerId) {
-          // Both domains are "unassigned", but they are different -> new temp container
-          shouldReplace = true;
-          reason = `domain change requiring new temp container isolation`;
+        // Handle session restore (currentDomain is null)
+        if (currentDomain === null) {
+          // If previous domain is unknown, only replace if a rule explicitly
+          // conflicts with the current container.
+          if (targetContainerId && tab.cookieStoreId !== targetContainerId) {
+            shouldReplace = true;
+            reason = `session restore mismatch: tab is in ${tab.cookieStoreId} but rule requires ${targetContainerId}`;
+          } else {
+            logDebug(`Session restore for ${newDomain}: keeping current container ${tab.cookieStoreId}`);
+          }
+        } else {
+          // Normal domain change navigation
+          // Resolve current domain's container for comparison
+          const currentTargetContainerId = await getContainerForDomain(currentUrl);
+          // Only replace if the target containers are actually different
+          if (targetContainerId !== currentTargetContainerId) {
+            shouldReplace = true;
+            reason = `domain change requiring different container: ${currentTargetContainerId} -> ${targetContainerId}`;
+          } else if (!targetContainerId && !currentTargetContainerId) {
+            // Both domains are "unassigned", but they are different -> new temp container
+            shouldReplace = true;
+            reason = `domain change requiring new temp container isolation`;
+          }
         }
       } else if (targetContainerId && tab.cookieStoreId !== targetContainerId) {
         // Case 4: Same domain navigation, but tab is in the wrong container per rules
@@ -877,7 +940,7 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
 
     if (shouldReplace) {
       logDebug(`Replacing tab ${tabId} for domain ${newDomain} (was ${currentDomain}): ${reason}`);
-      await replaceTabWithTempContainer(tab, newUrl, targetContainerId);
+      await replaceTab(tab, newUrl, targetContainerId);
       return; // Return early so dead tab isn't put back into tabUrls
     } else {
       logDebug(
@@ -902,8 +965,9 @@ async function handleNewTab(tab) {
     return;
   }
 
-  if (!tab.url || tab.url === 'about:blank' || tab.url === 'about:newtab') {
-    logDebug(`Tab URL is invalid or not set, skipping: ${tab.id}`);
+  if (!tab.url || tab.url.startsWith('about:')) {
+    // Skip pages like about:blank, about:newtab, about:addons, etc.
+    logDebug(`Skipping internal or blank page: ${tab.url || 'No URL'}, id: ${tab.id}`);
     return;
   }
 
@@ -940,7 +1004,7 @@ async function handleNewTab(tab) {
 
       if (targetContainerId && tab.cookieStoreId !== targetContainerId) {
         logDebug(`Replacing tab ${tab.id} with permanent container: ${targetContainerId}`);
-        await replaceTabWithTempContainer(tab, tab.url);
+        await replaceTab(tab, tab.url);
         return;
       } else if (targetContainerId) {
         logDebug(`Tab ${tab.id} already in correct permanent container: ${targetContainerId}`);
@@ -959,7 +1023,7 @@ async function handleNewTab(tab) {
       if (openerDomain === newDomain && openerContainerId && openerContainerId !== 'firefox-default') {
         if (tab.cookieStoreId !== openerContainerId) {
           logDebug(`Replacing tab ${tab.id} with opener's container: ${openerContainerId}`);
-          await replaceTabWithTempContainer(tab, tab.url);
+          await replaceTab(tab, tab.url);
         } else {
           logDebug(`Tab ${tab.id} already in correct opener container: ${openerContainerId}`);
         }
@@ -973,7 +1037,7 @@ async function handleNewTab(tab) {
     // If no permanent container or opener match, assign a new temporary container
     if (!isTempContainer || (openerTab && getDomain(tab.url) !== getDomain(openerTab.url))) {
       logDebug(`Replacing tab ${tab.id} with temporary container`);
-      await replaceTabWithTempContainer(tab, tab.url);
+      await replaceTab(tab, tab.url);
     } else {
       logDebug(`Tab ${tab.id} already in a suitable temporary container: ${tab.cookieStoreId}`);
       if (isTempContainer) {
@@ -1043,9 +1107,13 @@ browser.runtime.onMessage.addListener(async (message) => {
   }
 });
 
-// On startup, delete empty temporary containers and start timers for non-empty ones
+// Startup
 (async () => {
   logDebug('Auto Containers background script loaded');
+
+  const result = await browser.storage.local.get({ DEBUG: false });
+  DEBUG = result.DEBUG;
+  logDebug('Auto Containers: Debug mode set to:', DEBUG);
 
   // Create main context menu with submenu
   browser.contextMenus.create({
@@ -1069,13 +1137,16 @@ browser.runtime.onMessage.addListener(async (message) => {
   });
 
   const tempContainers = await getTempContainers();
+  logDebug(`Found ${tempContainers.length} temporary containers`);
 
+  //delete empty temporary containers
   for (const container of tempContainers) {
     const tabs = await browser.tabs.query({ cookieStoreId: container.cookieStoreId });
     if (tabs.length === 0) {
       await browser.contextualIdentities.remove(container.cookieStoreId);
       logDebug(`Deleted empty container on startup: ${container.cookieStoreId}`);
     } else {
+      // start deletion timer for non-empty temp container
       startDeletionTimer(container.cookieStoreId);
     }
   }

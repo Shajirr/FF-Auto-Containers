@@ -1,4 +1,4 @@
-const DEBUG = true; // Toggle for debug logging
+let DEBUG = false;
 
 function logDebug(...args) {
   if (DEBUG) console.log(...args);
