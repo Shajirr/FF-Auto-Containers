@@ -25,7 +25,7 @@ const permanentExclusions = new Set(); // only tabs explicitly excluded via cont
 const tabToExclusionTimer = new Map(); // tabId -> timerId (shared across inheritance chain)
 const exclusionGroups = new Map(); // timerId -> Set<tabId> (all tabs sharing the same timer)
 
-const EXCLUSION_TIMER = 60 * 1000; // in ms
+const EXCLUSION_TIMER = 30 * 60 * 1000; // in ms
 
 const COLORS = ['blue', 'turquoise', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'toolbar'];
 // prettier-ignore
