@@ -1,499 +1,500 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="light dark">
-  <title>Auto Containers</title>
-  <style>
-    body {
-	  width: 350px;
-	  max-width: calc(100%);
-	  padding: 16px;
-      font-family: -moz-system, system-ui, sans-serif;
-      font-size: 13px;
-      margin: 0;
-      background: Canvas;
-      color: CanvasText;
-      box-sizing: border-box;
-    }
-    
-    * {
-      box-sizing: border-box;
-    }
-	
-    .current-tab {
-      background: color-mix(in srgb, Canvas 85%, CanvasText 15%);
-      padding: 12px;
-      border-radius: 6px;
-      margin-bottom: 16px;
-      border-left: 4px solid AccentColor;
-    }
-    
-    .current-tab .url {
-      font-family: monospace;
-      font-size: 12px;
-      color: color-mix(in srgb, CanvasText 70%, transparent);
-      word-break: break-all;
-      margin-bottom: 4px;
-    }
-    
-    .current-tab .domain {
-      font-weight: bold;
-      color: LinkText;
-    }
-    
-    .current-tab .container {
-      font-size: 11px;
-      color: color-mix(in srgb, CanvasText 70%, transparent);
-      margin-top: 4px;
-    }
-    
-    .pattern-input {
-      margin-bottom: 12px;
-    }
-    
-    .pattern-input label {
-      display: block;
-      margin-bottom: 4px;
-      font-weight: bold;
-      color: CanvasText;
-    }
-    
-    .pattern-input input {
-      width: 100%;
-      padding: 6px;
-      border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
-      border-radius: 3px;
-      font-family: monospace;
-      font-size: 12px;
-      background: Field;
-      color: FieldText;
-    }
-    
-    .quick-suggestions {
-      margin-bottom: 16px;
-    }
-    
-    .quick-suggestions label {
-      display: block;
-      margin-bottom: 6px;
-      font-size: 12px;
-      color: color-mix(in srgb, CanvasText 70%, transparent);
-    }
-    
-    .suggestion-buttons {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-    
-    .suggestion-btn {
-      padding: 4px 8px;
-      background: color-mix(in srgb, Canvas 85%, CanvasText 15%);
-      border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
-      border-radius: 3px;
-      font-size: 11px;
-      font-family: monospace;
-      cursor: pointer;
-      color: LinkText;
-    }
-    
-    .suggestion-btn:hover {
-      background: color-mix(in srgb, Canvas 70%, CanvasText 30%);
-    }
-    
-    .container-style {
-      margin-bottom: 16px;
-      padding: 0px;
-      background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
-      border-radius: 6px;
-    }
-    
-    .container-style-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 8px 0;
-      font-weight: bold;
-      color: CanvasText;
-    }
-    
-    .style-controls {
-      display: flex;
-      gap: 12px;
-    }
-	.style-section {
-      flex: 1;
-    }
-    
-    .style-section:first-child {
-      flex: 3;
-    }
-    
-    .style-section:last-child {
-      flex: 5;
-    }
-	  
-    .style-section label {
-      display: block;
-      font-size: 12px;
-      margin-bottom: 6px;
-      color: CanvasText;
-      font-weight: normal;
-    }
-    
-    .color-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 6px;
-    }
-    
-    .color-swatch {
-      width: 100%;
-      aspect-ratio: 1;
-      border: 2px solid transparent;
-      border-radius: 50%;
-      cursor: pointer;
-      transition: all 0.15s ease;
-	  transform: scale(0.85);
-    }
-    
-    .color-swatch:hover {
-      transform: scale(1);
-      border-color: CanvasText;
-    }
-    
-	.color-swatch.selected {
-		border-color: white;
-		border: 2px solid;
-		box-shadow: 0 0 3px 3px AccentColor;
-	}
-    
-    .icon-grid {
-      display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      gap: 5px;
-    }
-    
-    .icon-option {
-      width: 100%;
-      aspect-ratio: 1;
-      border: 2px solid color-mix(in srgb, CanvasText 30%, transparent);
-      border-radius: 4px;
-      background: Field;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.15s ease;
-      font-size: 18px;
-    }
-    
-    .icon-option:hover {
-      transform: scale(1.08);
-      border-color: CanvasText;
-    }
-    
-    .icon-option.selected {
-      border-color: AccentColor;
-      background: color-mix(in srgb, AccentColor 20%, Field 80%);
-      box-shadow: inset 0 0 0 1px Canvas, inset 0 0 0 2px AccentColor;
-    }
-	
-	.style-buttons {
-	  padding: 0 12px 12px 12px;
-	  display: flex;
-	  gap: 8px;
-	}
-	
-    .container-input {
-      margin-bottom: 12px;
-    }
-    
-    .container-input label {
-      display: block;
-      margin-bottom: 4px;
-      font-weight: bold;
-      color: CanvasText;
-    }
-    
-    .container-input input {
-      width: 100%;
-      padding: 6px;
-      border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
-      border-radius: 3px;
-      background: Field;
-      color: FieldText;
-    }
-    
-    .buttons {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 16px;
-    }
-    
-    .buttons button {
-      flex: 1;
-      padding: 8px;
-      border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
-      border-radius: 3px;
-      background: ButtonFace;
-      color: ButtonText;
-      cursor: pointer;
-    }
-    
-    .buttons button.primary {
-      background: AccentColor;
-      color: AccentColorText;
-      border-color: AccentColor;
-    }
-    
-    .buttons button:hover {
-      background: color-mix(in srgb, ButtonFace 85%, ButtonText 15%);
-    }
-    
-    .buttons button.primary:hover {
-      background: color-mix(in srgb, AccentColor 85%, black 15%);
-    }
-    
-    .buttons button.secondary {
-      background: color-mix(in srgb, Canvas 85%, CanvasText 15%);
-      color: CanvasText;
-      border-color: color-mix(in srgb, CanvasText 30%, transparent);
-    }
-    
-    .buttons button.secondary:hover {
-      background: color-mix(in srgb, Canvas 70%, CanvasText 30%);
-    }
-	
-    .status-message {
-      margin-top: 12px;
-      padding: 8px;
-      border-radius: 3px;
-      font-size: 12px;
-      text-align: center;
-    }
-    
-    .status-message.success {
-      background: color-mix(in srgb, green 20%, Canvas 80%);
-      color: color-mix(in srgb, green 80%, CanvasText 20%);
-      border: 1px solid color-mix(in srgb, green 40%, transparent 60%);
-    }
-    
-    .status-message.error {
-      background: color-mix(in srgb, red 20%, Canvas 80%);
-      color: color-mix(in srgb, red 80%, CanvasText 20%);
-      border: 1px solid color-mix(in srgb, red 40%, transparent 60%);
-    }
-    
-    .existing-containers {
-      margin-bottom: 8px;
-    }
-    
-    .existing-containers select {
-      width: 100%;
-      padding: 6px;
-      border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
-      border-radius: 3px;
-      background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
-      color: FieldText;
-    }
-    
-    .related-rules h3 {
-      font-size: 14px;
-      margin: 16px 0 12px 0;
-      color: CanvasText;
-    }
-    
-    .rules-list {
-      margin-bottom: 12px;
-    }
-    
-    .rule-item {
-      display: flex;
-      align-items: center;
-      margin-bottom: 6px;
-      gap: 6px;
-    }
-    
-    .rule-item input {
-      flex: 1;
-      padding: 6px;
-      border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
-      border-radius: 3px;
-      font-family: monospace;
-      font-size: 12px;
-      background: Field;
-      color: FieldText;
-    }
-    
-    .rule-item input.error {
-      border-color: red;
-      background: color-mix(in srgb, red 10%, Field 90%);
-    }
-    
-    .rule-item .delete-btn {
-      width: 24px;
-      height: 24px;
-      border: 1px solid red;
-      background: ButtonFace;
-      color: red;
-      border-radius: 3px;
-      cursor: pointer;
-      font-size: 14px;
-      line-height: 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-    }
-    
-    .rule-item .delete-btn:hover {
-      background: red;
-      color: white;
-    }
-    
-    .no-rules {
-      color: color-mix(in srgb, CanvasText 70%, transparent);
-      font-size: 12px;
-      font-style: italic;
-      text-align: center;
-      padding: 12px;
-      background: color-mix(in srgb, Canvas 95%, CanvasText 5%);
-      border-radius: 3px;
-    }
-	
-    .hidden {
-      display: none;
-    }
-	
-    /* Styling for collapsible container-style section */
-    details.container-style {
-      margin-bottom: 16px;
-      padding: 0;
-      background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
-      border-radius: 6px;
-    }
-    
-    details.container-style > summary {
-      padding: 12px;
-      font-weight: bold;
-      color: CanvasText;
-      cursor: pointer;
-      list-style: none;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    
-    details.container-style > summary::-webkit-details-marker {
-      display: none;
-    }
-    
-    details.container-style > summary::before {
-      content: '▶';
-      font-size: 12px;
-      color: CanvasText;
-      transition: transform 0.2s ease;
-    }
-    
-    details.container-style[open] > summary::before {
-      transform: rotate(90deg);
-    }
-    
-    details.container-style > .style-controls {
-      padding: 0 12px 12px 12px;
-    }
-    @media (prefers-color-scheme: dark) {
-      .existing-containers select {
-        appearance: none;
-        background: color-mix(in srgb, Canvas 108%, white 8%);
-        background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"><path fill="white" d="M2.5 4.5L6 8l3.5-3.5z"/></svg>');
-        background-repeat: no-repeat;
-        background-position: right 8px center;
-        padding-right: 28px;
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Auto Containers</title>
+    <style>
+      body {
+        width: 350px;
+        max-width: calc(100%);
+        padding: 16px;
+        font-family: -moz-system, system-ui, sans-serif;
+        font-size: 13px;
+        margin: 0;
+        background: Canvas;
+        color: CanvasText;
+        box-sizing: border-box;
       }
-	  
-	  .icon-option {
-		background-color: #d8d8d8;
-		filter: invert(1);
-	  }
-	  
-	  .icon-option.selected {
-		background-color: AccentColor;
-	  }
-    }
-  </style>
-</head>
-<body>
-  <div class="current-tab">
-    <div class="url" id="currentUrl">Loading...</div>
-    <div class="domain" id="currentDomain"></div>
-    <div class="container" id="currentContainer"></div>
-  </div>
-  
-  <div class="pattern-input">
-    <label for="patternName">Pattern:</label>
-    <input type="text" id="patternName" placeholder="Enter pattern">
-  </div>
 
-  <div class="quick-suggestions">
-    <label>Quick suggestions:</label>
-    <div class="suggestion-buttons">
-      <button type="button" class="suggestion-btn" id="domainSugg">domain.com</button>
-      <button type="button" class="suggestion-btn" id="pathSugg">domain.com/path</button>
-      <button type="button" class="suggestion-btn" id="wildcardSugg">google.*</button>
+      * {
+        box-sizing: border-box;
+      }
+
+      .current-tab {
+        background: color-mix(in srgb, Canvas 85%, CanvasText 15%);
+        padding: 12px;
+        border-radius: 6px;
+        margin-bottom: 16px;
+        border-left: 4px solid AccentColor;
+      }
+
+      .current-tab .url {
+        font-family: monospace;
+        font-size: 12px;
+        color: color-mix(in srgb, CanvasText 70%, transparent);
+        word-break: break-all;
+        margin-bottom: 4px;
+      }
+
+      .current-tab .domain {
+        font-weight: bold;
+        color: LinkText;
+      }
+
+      .current-tab .container {
+        font-size: 11px;
+        color: color-mix(in srgb, CanvasText 70%, transparent);
+        margin-top: 4px;
+      }
+
+      .pattern-input {
+        margin-bottom: 12px;
+      }
+
+      .pattern-input label {
+        display: block;
+        margin-bottom: 4px;
+        font-weight: bold;
+        color: CanvasText;
+      }
+
+      .pattern-input input {
+        width: 100%;
+        padding: 6px;
+        border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+        border-radius: 3px;
+        font-family: monospace;
+        font-size: 12px;
+        background: Field;
+        color: FieldText;
+      }
+
+      .quick-suggestions {
+        margin-bottom: 16px;
+      }
+
+      .quick-suggestions label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 12px;
+        color: color-mix(in srgb, CanvasText 70%, transparent);
+      }
+
+      .suggestion-buttons {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      .suggestion-btn {
+        padding: 4px 8px;
+        background: color-mix(in srgb, Canvas 85%, CanvasText 15%);
+        border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+        border-radius: 3px;
+        font-size: 11px;
+        font-family: monospace;
+        cursor: pointer;
+        color: LinkText;
+      }
+
+      .suggestion-btn:hover {
+        background: color-mix(in srgb, Canvas 70%, CanvasText 30%);
+      }
+
+      .container-style {
+        margin-bottom: 16px;
+        padding: 0px;
+        background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
+        border-radius: 6px;
+      }
+
+      .container-style-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 0;
+        font-weight: bold;
+        color: CanvasText;
+      }
+
+      .style-controls {
+        display: flex;
+        gap: 12px;
+      }
+      .style-section {
+        flex: 1;
+      }
+
+      .style-section:first-child {
+        flex: 3;
+      }
+
+      .style-section:last-child {
+        flex: 5;
+      }
+
+      .style-section label {
+        display: block;
+        font-size: 12px;
+        margin-bottom: 6px;
+        color: CanvasText;
+        font-weight: normal;
+      }
+
+      .color-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+      }
+
+      .color-swatch {
+        width: 100%;
+        aspect-ratio: 1;
+        border: 2px solid transparent;
+        border-radius: 50%;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        transform: scale(0.85);
+      }
+
+      .color-swatch:hover {
+        transform: scale(1);
+        border-color: CanvasText;
+      }
+
+      .color-swatch.selected {
+        border: 2px solid white;
+        box-shadow: 0 0 3px 3px AccentColor;
+      }
+
+      .icon-grid {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 5px;
+      }
+
+      .icon-option {
+        width: 100%;
+        aspect-ratio: 1;
+        border: 2px solid color-mix(in srgb, CanvasText 30%, transparent);
+        border-radius: 4px;
+        background: Field;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.15s ease;
+        font-size: 18px;
+      }
+
+      .icon-option:hover {
+        transform: scale(1.08);
+        border-color: CanvasText;
+      }
+
+      .icon-option.selected {
+        border-color: AccentColor;
+        background: color-mix(in srgb, AccentColor 20%, Field 80%);
+        box-shadow:
+          inset 0 0 0 1px Canvas,
+          inset 0 0 0 2px AccentColor;
+      }
+
+      .style-buttons {
+        padding: 0 12px 12px 12px;
+        display: flex;
+        gap: 8px;
+      }
+
+      .container-input {
+        margin-bottom: 12px;
+      }
+
+      .container-input label {
+        display: block;
+        margin-bottom: 4px;
+        font-weight: bold;
+        color: CanvasText;
+      }
+
+      .container-input input {
+        width: 100%;
+        padding: 6px;
+        border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+        border-radius: 3px;
+        background: Field;
+        color: FieldText;
+      }
+
+      .buttons {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .buttons button {
+        flex: 1;
+        padding: 8px;
+        border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+        border-radius: 3px;
+        background: ButtonFace;
+        color: ButtonText;
+        cursor: pointer;
+      }
+
+      .buttons button.primary {
+        background: AccentColor;
+        color: AccentColorText;
+        border-color: AccentColor;
+      }
+
+      .buttons button:hover {
+        background: color-mix(in srgb, ButtonFace 85%, ButtonText 15%);
+      }
+
+      .buttons button.primary:hover {
+        background: color-mix(in srgb, AccentColor 85%, black 15%);
+      }
+
+      .buttons button.secondary {
+        background: color-mix(in srgb, Canvas 85%, CanvasText 15%);
+        color: CanvasText;
+        border-color: color-mix(in srgb, CanvasText 30%, transparent);
+      }
+
+      .buttons button.secondary:hover {
+        background: color-mix(in srgb, Canvas 70%, CanvasText 30%);
+      }
+
+      .status-message {
+        margin-top: 12px;
+        padding: 8px;
+        border-radius: 3px;
+        font-size: 12px;
+        text-align: center;
+      }
+
+      .status-message.success {
+        background: color-mix(in srgb, green 20%, Canvas 80%);
+        color: color-mix(in srgb, green 80%, CanvasText 20%);
+        border: 1px solid color-mix(in srgb, green 40%, transparent 60%);
+      }
+
+      .status-message.error {
+        background: color-mix(in srgb, red 20%, Canvas 80%);
+        color: color-mix(in srgb, red 80%, CanvasText 20%);
+        border: 1px solid color-mix(in srgb, red 40%, transparent 60%);
+      }
+
+      .existing-containers {
+        margin-bottom: 8px;
+      }
+
+      .existing-containers select {
+        width: 100%;
+        padding: 6px;
+        border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+        border-radius: 3px;
+        background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
+        color: FieldText;
+      }
+
+      .related-rules h3 {
+        font-size: 14px;
+        margin: 16px 0 12px 0;
+        color: CanvasText;
+      }
+
+      .rules-list {
+        margin-bottom: 12px;
+      }
+
+      .rule-item {
+        display: flex;
+        align-items: center;
+        margin-bottom: 6px;
+        gap: 6px;
+      }
+
+      .rule-item input {
+        flex: 1;
+        padding: 6px;
+        border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+        border-radius: 3px;
+        font-family: monospace;
+        font-size: 12px;
+        background: Field;
+        color: FieldText;
+      }
+
+      .rule-item input.error {
+        border-color: red;
+        background: color-mix(in srgb, red 10%, Field 90%);
+      }
+
+      .rule-item .delete-btn {
+        width: 24px;
+        height: 24px;
+        border: 1px solid red;
+        background: ButtonFace;
+        color: red;
+        border-radius: 3px;
+        cursor: pointer;
+        font-size: 14px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+
+      .rule-item .delete-btn:hover {
+        background: red;
+        color: white;
+      }
+
+      .no-rules {
+        color: color-mix(in srgb, CanvasText 70%, transparent);
+        font-size: 12px;
+        font-style: italic;
+        text-align: center;
+        padding: 12px;
+        background: color-mix(in srgb, Canvas 95%, CanvasText 5%);
+        border-radius: 3px;
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      /* Styling for collapsible container-style section */
+      details.container-style {
+        margin-bottom: 16px;
+        padding: 0;
+        background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
+        border-radius: 6px;
+      }
+
+      details.container-style > summary {
+        padding: 12px;
+        font-weight: bold;
+        color: CanvasText;
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      details.container-style > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      details.container-style > summary::before {
+        content: '▶';
+        font-size: 12px;
+        color: CanvasText;
+        transition: transform 0.2s ease;
+      }
+
+      details.container-style[open] > summary::before {
+        transform: rotate(90deg);
+      }
+
+      details.container-style > .style-controls {
+        padding: 0 12px 12px 12px;
+      }
+      @media (prefers-color-scheme: dark) {
+        .existing-containers select {
+          appearance: none;
+          background: color-mix(in srgb, Canvas 92%, white 8%);
+          background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"><path fill="white" d="M2.5 4.5L6 8l3.5-3.5z"/></svg>');
+          background-repeat: no-repeat;
+          background-position: right 8px center;
+          padding-right: 28px;
+        }
+
+        .icon-option {
+          background-color: #d8d8d8;
+          filter: invert(1);
+        }
+
+        .icon-option.selected {
+          background-color: AccentColor;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="current-tab">
+      <div class="url" id="currentUrl">Loading...</div>
+      <div class="domain" id="currentDomain"></div>
+      <div class="container" id="currentContainer"></div>
     </div>
-  </div>
-  
-  <details class="container-style">
-    <summary>Container Style</summary>
-    <div class="style-controls">
-      <div class="style-section">
-        <label>Color:</label>
-        <div class="color-grid" id="colorGrid"></div>
+
+    <div class="pattern-input">
+      <label for="patternName">Pattern:</label>
+      <input type="text" id="patternName" placeholder="Enter pattern" />
+    </div>
+
+    <div class="quick-suggestions">
+      <label>Quick suggestions:</label>
+      <div class="suggestion-buttons">
+        <button type="button" class="suggestion-btn" id="domainSugg">domain.com</button>
+        <button type="button" class="suggestion-btn" id="pathSugg">domain.com/path</button>
+        <button type="button" class="suggestion-btn" id="wildcardSugg">google.*</button>
       </div>
-      <div class="style-section">
-        <label>Icon:</label>
-        <div class="icon-grid" id="iconGrid"></div>
+    </div>
+
+    <details class="container-style">
+      <summary>Container Style</summary>
+      <div class="style-controls">
+        <div class="style-section">
+          <label>Color:</label>
+          <div class="color-grid" id="colorGrid"></div>
+        </div>
+        <div class="style-section">
+          <label>Icon:</label>
+          <div class="icon-grid" id="iconGrid"></div>
+        </div>
       </div>
+      <div class="style-buttons">
+        <button id="applyToCurrentContainer" class="secondary">Apply to current container</button>
+      </div>
+    </details>
+    <div class="container-input">
+      <label for="containerName">Container Name:</label>
+      <div class="existing-containers">
+        <select id="existingContainers">
+          <option value="">Enter name (or select existing)</option>
+        </select>
+      </div>
+      <input type="text" id="containerName" placeholder="Enter container name" />
     </div>
-	<div class="style-buttons">
-		<button id="applyToCurrentContainer" class="secondary">Apply to current container</button>
-	</div>
-  </details>
-  <div class="container-input">
-    <label for="containerName">Container Name:</label>
-    <div class="existing-containers">
-      <select id="existingContainers">
-        <option value="">Enter name (or select existing)</option>
-      </select>
+
+    <div id="convertTempContainerSection" style="margin-bottom: 12px">
+      <label style="display: flex; align-items: center; gap: 8px; cursor: pointer">
+        <input type="checkbox" id="convertTempContainer" />
+        <span>Convert current temp container</span>
+      </label>
     </div>
-    <input type="text" id="containerName" placeholder="Enter container name">
-  </div>
-  
-  <div id="convertTempContainerSection" style="margin-bottom: 12px;">
-    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-      <input type="checkbox" id="convertTempContainer">
-      <span>Convert current temp container</span>
-    </label>
-  </div>
-  
-  <div class="buttons">
-    <button id="saveRule" class="primary">Add Rule</button>
-    <button id="openOptions">All Rules</button>
-  </div>
-  
-  <div id="statusMessage" class="status-message hidden"></div>
-  
-  <div class="related-rules" id="relatedRulesSection">
-    <h3>Related Rules</h3>
-    <div class="rules-list" id="relatedRulesList">
-      <!-- Rules will be populated here -->
+
+    <div class="buttons">
+      <button id="saveRule" class="primary">Add Rule</button>
+      <button id="openOptions">All Rules</button>
     </div>
-    <button id="saveEdits" class="secondary">Save Edits</button>
-  </div>
-  <script src="popup.js"></script>
-</body>
+
+    <div id="statusMessage" class="status-message hidden"></div>
+
+    <div class="related-rules" id="relatedRulesSection">
+      <h3>Related Rules</h3>
+      <div class="rules-list" id="relatedRulesList">
+        <!-- Rules will be populated here -->
+      </div>
+      <button id="saveEdits" class="secondary">Save Edits</button>
+    </div>
+    <script src="popup.js"></script>
+  </body>
 </html>

@@ -542,6 +542,18 @@ browser.tabs.onCreated.addListener(async (tab) => {
   if (tab.cookieStoreId) {
     tabCookieStoreIds.set(tab.id, tab.cookieStoreId);
   }
+
+  // If the opener tab is excluded from domain isolation, inherit that exclusion.
+  // This preserves container context across multi-domain flows (e.g. payment redirects)
+  // where the next stage opens in a new tab and must stay in the same container.
+  // Inheritance is temporary and shares timer with the source chain.
+  if (tab.openerTabId && excludedTabs.has(tab.openerTabId)) {
+    await inheritExclusion(tab.id, tab.openerTabId);
+    logDebug(`Tab ${tab.id} inherited domain isolation exclusion from opener tab ${tab.openerTabId}`);
+    // Don't return - handleNewTab will skip processing this tab due to the exclusion,
+    // and Firefox naturally keeps the new tab in the opener's container
+  }
+
   const container = tab.cookieStoreId
     ? await browser.contextualIdentities.get(tab.cookieStoreId).catch(() => null)
     : null;
@@ -560,17 +572,6 @@ browser.tabs.onCreated.addListener(async (tab) => {
   if (addonCreatedTabs.has(tab.id)) {
     logDebug(`Tab ${tab.id} was created by addon, skipping processing`);
     return;
-  }
-
-  // If the opener tab is excluded from domain isolation, inherit that exclusion.
-  // This preserves container context across multi-domain flows (e.g. payment redirects)
-  // where the next stage opens in a new tab and must stay in the same container.
-  //Inheritance is temporary and shares timer with the source chain.
-  if (tab.openerTabId && excludedTabs.has(tab.openerTabId)) {
-    await inheritExclusion(tab.id, tab.openerTabId);
-    logDebug(`Tab ${tab.id} inherited domain isolation exclusion from opener tab ${tab.openerTabId}`);
-    // Don't return - handleNewTab will skip processing this tab due to the exclusion,
-    // and Firefox naturally keeps the new tab in the opener's container
   }
 
   // Handle blank tabs - prevent domain contamination while preserving tab restoration
@@ -793,6 +794,21 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
 
   logDebug(`handleContainerChangeOnNavigation - tabId: ${tabId}, newUrl: ${newUrl}`);
 
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!tab) return;
+
+  // Check for inherited exclusion status before locking.
+  // For cases where onBeforeNavigate beats onCreated to the tab.
+  // Only inherit if the tab is new to extension (!tabUrls.has) to prevent re-inheriting status after it was removed.
+  if (!tabUrls.has(tabId) && tab.openerTabId && excludedTabs.has(tab.openerTabId)) {
+    await inheritExclusion(tab.id, tab.openerTabId);
+    logDebug(`Tab ${tab.id} inherited domain isolation exclusion from opener tab ${tab.openerTabId}`);
+    // Set the URL so the next navigation knows this tab is established
+    tabUrls.set(tabId, newUrl);
+    return; // this tab is excluded, do not change its container
+  }
+
+  // Standard processing locks
   if (addonCreatedTabs.has(tabId) || pendingTabs.has(tabId) || processingTabs.has(tabId)) {
     logDebug(`Skipping tab ${tabId} as it's addon-created, pending, or already processing`);
     return;
@@ -805,15 +821,9 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
     const newDomain = getDomain(newUrl);
     if (!newDomain) return;
 
-    // Synchronously capture the stored URL before any `await` yields the event loop.
+    // Synchronously get currentUrl from the map before the next 'await' (getContainerForDomain) to prevent race conditions.
     // This stops concurrent onUpdated events from overwriting tabUrls before its read.
-    const storedUrl = tabUrls.get(tabId);
-
-    const tab = await browser.tabs.get(tabId).catch(() => null);
-    if (!tab) return;
-
-    // Use the safely captured storedUrl
-    let currentUrl = storedUrl;
+    let currentUrl = tabUrls.get(tabId);
 
     // If no stored URL exists, it's an untracked (blank/new) tab.
     // Prevent Firefox's preemptive tab.url update from tricking the comparison.
@@ -822,7 +832,6 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
     }
 
     const currentDomain = getDomain(currentUrl);
-
     logDebug(`Domain comparison - Current: ${currentDomain} (from ${currentUrl}), New: ${newDomain} (from ${newUrl})`);
 
     const currentContainer = tab.cookieStoreId
