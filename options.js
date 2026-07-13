@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   logDebug('Options page loaded');
 
   const containerRules = document.getElementById('containerRules');
+  const overrideRulesEl = document.getElementById('overrideRules');
   const showNotifications = document.getElementById('showNotifications');
   const debugLogging = document.getElementById('debugLogging');
   const saveButton = document.getElementById('saveButton');
@@ -23,7 +24,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const randomIconCheckbox = document.getElementById('randomIcon');
 
   // Check if DOM elements exist
-  if (!containerRules || !showNotifications || !debugLogging || !saveButton || !saveMessage) {
+  if (!containerRules || !overrideRulesEl || !showNotifications || !debugLogging || !saveButton || !saveMessage) {
     console.error('One or more DOM elements not found');
     saveMessage.textContent = 'Error: Options page elements not found';
     saveMessage.classList.add('error', 'visible');
@@ -43,7 +44,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   await updateContainerCounts();
 
   // Load existing settings
-  const { rules = '', notifications = true } = await browser.storage.local.get(['rules', 'notifications']);
+  const {
+    rules = '',
+    overrideRules = '',
+    notifications = true,
+  } = await browser.storage.local.get(['rules', 'overrideRules', 'notifications']);
 
   // Load default temp container style
   const { tempContainerStyle = { color: 'blue', icon: 'circle', randomColor: false, randomIcon: false } } =
@@ -160,120 +165,152 @@ document.addEventListener('DOMContentLoaded', async () => {
   logDebug('Loaded notifications setting:', notifications);
 
   containerRules.value = rules;
+  overrideRulesEl.value = overrideRules;
   showNotifications.checked = notifications;
   debugLogging.checked = DEBUG;
 
   // Listen for storage changes to update the UI
   browser.storage.onChanged.addListener(async (changes, namespace) => {
-    if (namespace === 'local' && changes.DEBUG) {
-      DEBUG = changes.DEBUG.newValue ?? false;
-    }
-    if (namespace === 'local' && changes.rules) {
-      logDebug('Rules changed externally, updating display');
-      containerRules.value = changes.rules.newValue || '';
-      await updateContainerCounts();
+    if (namespace === 'local') {
+      if (changes.DEBUG) {
+        DEBUG = changes.DEBUG.newValue ?? false;
+      }
+      if (changes.rules) {
+        logDebug('Rules changed externally, updating display');
+        containerRules.value = changes.rules.newValue || '';
+        await updateContainerCounts();
+      }
+      if (changes.overrideRules) {
+        logDebug('Override rules changed externally, updating display');
+        overrideRulesEl.value = changes.overrideRules.newValue || '';
+      }
     }
   });
+
+  // Helper function to trigger notifications and DOM error states
+  async function triggerError(errorMessage) {
+    saveMessage.textContent = errorMessage;
+    saveMessage.classList.add('error', 'visible');
+    setTimeout(() => {
+      saveMessage.classList.remove('visible', 'error');
+    }, 5000);
+
+    if (showNotifications.checked) {
+      await browser.notifications.create({
+        type: 'basic',
+        title: 'Invalid Rules Format',
+        message: errorMessage,
+      });
+    }
+  }
+
+  // Validate rules format
+  function validateRulesText(text, ruleListName) {
+    const lines = text.split('\n').filter((line) => line.trim() !== '');
+
+    let invalidLine = null;
+    let invalidLineNumber = 0;
+    let errorType = '';
+
+    const isValid = lines.every((line, index) => {
+      const trimmedLine = line.trim();
+
+      // Check basic format: must have at least one comma
+      if (!trimmedLine.includes(',')) {
+        invalidLine = trimmedLine;
+        invalidLineNumber = index + 1;
+        errorType = 'format';
+        return false;
+      }
+
+      // Check for correct comma format: no space before comma, space after comma
+      if (!/^[^,\s]+,\s+.+$/.test(trimmedLine)) {
+        invalidLine = trimmedLine;
+        invalidLineNumber = index + 1;
+        errorType = 'format';
+        return false;
+      }
+
+      const commaIndex = trimmedLine.indexOf(',');
+      const pattern = trimmedLine.slice(0, commaIndex).trim();
+      const name = trimmedLine.slice(commaIndex + 1).trim();
+
+      // Check for empty pattern or name
+      if (!pattern || !name) {
+        invalidLine = trimmedLine;
+        invalidLineNumber = index + 1;
+        errorType = pattern ? 'name' : 'pattern';
+        return false;
+      }
+
+      // Validate pattern - allow domains with wildcards, hyphens, underscores, and paths
+      const isDomainPattern =
+        /^(\*\.)?([a-zA-Z0-9_-]+\.)*([a-zA-Z0-9_*-]+)(\.[a-zA-Z0-9_-]+)*(\.\*)?(\/.*)?$/.test(pattern) ||
+        pattern.includes('/');
+
+      if (!isDomainPattern) {
+        invalidLine = trimmedLine;
+        invalidLineNumber = index + 1;
+        errorType = 'pattern';
+        return false;
+      }
+
+      // Validate container name (any printable characters and spaces)
+      if (!/^[\x20-\x7E]+$/.test(name)) {
+        invalidLine = trimmedLine;
+        invalidLineNumber = index + 1;
+        errorType = 'name';
+        return false;
+      }
+
+      return true;
+    });
+
+    if (!isValid && lines.length > 0) {
+      let errorMessage = '';
+      switch (errorType) {
+        case 'format':
+          errorMessage = `[${ruleListName}] Invalid format on line ${invalidLineNumber}: "${invalidLine}". Each rule must be in the format: Pattern, Name (e.g., youtube.com, YT)`;
+          break;
+        case 'pattern':
+          errorMessage = `[${ruleListName}] Invalid pattern on line ${invalidLineNumber}: "${invalidLine}". Pattern must be a valid domain (e.g., google.com, *.google.*, google.*, *.google.com) or URL path (e.g., google.com/search)`;
+          break;
+        case 'name':
+          errorMessage = `[${ruleListName}] Invalid container name on line ${invalidLineNumber}: "${invalidLine}". Container name must not be empty and contain only printable characters`;
+          break;
+        default:
+          errorMessage = `[${ruleListName}] Invalid rule on line ${invalidLineNumber}: "${invalidLine}"`;
+      }
+      return errorMessage;
+    }
+
+    return null; // Indicates successful validation
+  }
 
   // Save settings
   saveButton.addEventListener('click', async () => {
     try {
       const rulesText = containerRules.value.trim();
-      const lines = rulesText.split('\n').filter((line) => line.trim() !== '');
-      // Validate rules format
-      let invalidLine = null;
-      let invalidLineNumber = 0;
-      let errorType = '';
+      const overrideRulesText = overrideRulesEl.value.trim();
 
-      const isValid = lines.every((line, index) => {
-        const trimmedLine = line.trim();
+      // Validate Standard Rules
+      const rulesError = validateRulesText(rulesText, 'Container Rules');
+      if (rulesError) {
+        await triggerError(rulesError);
+        return;
+      }
 
-        // Check basic format: must have at least one comma
-        if (!trimmedLine.includes(',')) {
-          invalidLine = trimmedLine;
-          invalidLineNumber = index + 1;
-          errorType = 'format';
-          return false;
-        }
-
-        // Check for correct comma format: no space before comma, space after comma
-        if (!/^[^,\s]+,\s+.+$/.test(trimmedLine)) {
-          invalidLine = trimmedLine;
-          invalidLineNumber = index + 1;
-          errorType = 'format';
-          return false;
-        }
-
-        const commaIndex = trimmedLine.indexOf(',');
-        const pattern = trimmedLine.slice(0, commaIndex).trim();
-        const name = trimmedLine.slice(commaIndex + 1).trim();
-
-        // Check for empty pattern or name
-        if (!pattern || !name) {
-          invalidLine = trimmedLine;
-          invalidLineNumber = index + 1;
-          errorType = pattern ? 'name' : 'pattern';
-          return false;
-        }
-
-        // Validate pattern - allow domains with wildcards, hyphens, underscores, and paths
-        const isDomainPattern =
-          /^(\*\.)?([a-zA-Z0-9_-]+\.)*([a-zA-Z0-9_*-]+)(\.[a-zA-Z0-9_-]+)*(\.\*)?(\/.*)?$/.test(pattern) ||
-          pattern.includes('/');
-
-        if (!isDomainPattern) {
-          invalidLine = trimmedLine;
-          invalidLineNumber = index + 1;
-          errorType = 'pattern';
-          return false;
-        }
-
-        // Validate container name (any printable characters and spaces)
-        if (!/^[\x20-\x7E]+$/.test(name)) {
-          invalidLine = trimmedLine;
-          invalidLineNumber = index + 1;
-          errorType = 'name';
-          return false;
-        }
-
-        return true;
-      });
-
-      if (!isValid && lines.length > 0) {
-        let errorMessage = '';
-        switch (errorType) {
-          case 'format':
-            errorMessage = `Invalid rule format on line ${invalidLineNumber}: "${invalidLine}". Each rule must be in the format: Pattern, Name (e.g., youtube.com, YT)`;
-            break;
-          case 'pattern':
-            errorMessage = `Invalid pattern on line ${invalidLineNumber}: "${invalidLine}". Pattern must be a valid domain (e.g., google.com, *.google.*, google.*, *.google.com) or URL path (e.g., google.com/search)`;
-            break;
-          case 'name':
-            errorMessage = `Invalid container name on line ${invalidLineNumber}: "${invalidLine}". Container name must not be empty and contain only printable characters`;
-            break;
-          default:
-            errorMessage = `Invalid rule on line ${invalidLineNumber}: "${invalidLine}"`;
-        }
-
-        saveMessage.textContent = errorMessage;
-        saveMessage.classList.add('error', 'visible');
-        setTimeout(() => {
-          saveMessage.classList.remove('visible', 'error');
-        }, 3000);
-
-        if (showNotifications.checked) {
-          await browser.notifications.create({
-            type: 'basic',
-            title: 'Invalid Rules Format',
-            message: errorMessage,
-          });
-        }
+      // Validate Override Rules
+      const overrideError = validateRulesText(overrideRulesText, 'Override Rules');
+      if (overrideError) {
+        await triggerError(overrideError);
         return;
       }
 
       // Save rules and notification setting
       await browser.storage.local.set({
         rules: rulesText,
+        overrideRules: overrideRulesText,
         notifications: showNotifications.checked,
         DEBUG: debugLogging.checked,
         tempContainerStyle: {
@@ -307,16 +344,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         await browser.notifications.create({
           type: 'basic',
           title: 'Settings Saved',
-          message: 'Container rules and notification settings have been saved.',
+          message: 'Auto Containers settings have been saved.',
         });
       }
     } catch (error) {
       console.error('Save error:', error);
-      saveMessage.textContent = `Error saving: ${error.message}`;
-      saveMessage.classList.add('error', 'visible');
-      setTimeout(() => {
-        saveMessage.classList.remove('visible', 'error');
-      }, 5000);
+      await triggerError(`Error saving: ${error.message}`);
     }
   });
 });

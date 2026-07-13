@@ -85,7 +85,7 @@ async function getNextContainerNumber() {
   return nextNum;
 }
 
-// Get random color or icon
+// Get random colour or icon
 function getRandomItem(array) {
   return array[Math.floor(Math.random() * array.length)];
 }
@@ -251,6 +251,42 @@ async function getContainerForDomain(url) {
     console.error(`Error in getContainerForDomain for URL: ${url}`, error);
     return null;
   }
+}
+
+// Function to check override rules that allow staying in current container
+async function checkOverrideRules(url, containerName) {
+  if (!containerName || containerName === 'firefox-default') return false;
+
+  try {
+    const { overrideRules = '' } = await browser.storage.local.get('overrideRules');
+    const ruleLines = overrideRules.split('\n').filter((line) => line.trim() !== '');
+
+    if (ruleLines.length === 0) return false;
+
+    const domain = getDomain(url);
+    if (!domain) return false;
+
+    for (const line of ruleLines) {
+      const firstComma = line.indexOf(',');
+      if (firstComma === -1) continue;
+
+      const rulePattern = line.substring(0, firstComma).trim();
+      // Supports checking against multiple comma-separated allowed containers per domain rule
+      const allowedContainers = line
+        .substring(firstComma + 1)
+        .split(',')
+        .map((c) => c.trim())
+        .filter((c) => c !== '');
+
+      if (allowedContainers.includes(containerName) && matchesRule(url, domain, rulePattern)) {
+        logDebug(`Override rule matched: ${rulePattern} allows staying in ${containerName}`);
+        return true;
+      }
+    }
+  } catch (error) {
+    console.error(`Error in checkOverrideRules for URL: ${url}`, error);
+  }
+  return false;
 }
 
 // Function to check if a URL matches a rule pattern
@@ -839,8 +875,20 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
       : null;
     const isTempContainer = currentContainer && /^tmp_\d+$/.test(currentContainer.name);
 
-    // Check if the tab is in the default container or needs a different container
-    const targetContainerId = await getContainerForDomain(newUrl);
+    // If the tab is currently isolated, check if the override list permits this container hop
+    let isOverrideAllowed = false;
+    if (currentContainer && currentContainer.name !== 'firefox-default') {
+      isOverrideAllowed = await checkOverrideRules(newUrl, currentContainer.name);
+    }
+
+    let targetContainerId;
+    if (isOverrideAllowed) {
+      logDebug(`Override rule active for ${newUrl}, forcing target to current container ${currentContainer.name}`);
+      targetContainerId = tab.cookieStoreId;
+    } else {
+      // Check if the tab is in the default container or needs a different container
+      targetContainerId = await getContainerForDomain(newUrl);
+    }
 
     // Handle special reserved container names
     if (targetContainerId === '#Ignore') {
@@ -1001,7 +1049,22 @@ async function handleNewTab(tab) {
     // Fetch opener tab once here so it's available for both the same-domain check below
     // and the final fallback condition, avoiding a redundant browser.tabs.get() call
     const openerTab = tab.openerTabId ? await browser.tabs.get(tab.openerTabId).catch(() => null) : null;
-    // Check for permanent container first
+
+    // Override list check for inherited containers
+    if (currentContainer && currentContainer.name !== 'firefox-default') {
+      const isOverrideAllowed = await checkOverrideRules(tab.url, currentContainer.name);
+      if (isOverrideAllowed) {
+        logDebug(
+          `New tab ${tab.id} matched override rule for ${tab.url} in inherited container ${currentContainer.name}. Staying.`,
+        );
+        if (isTempContainer) {
+          startDeletionTimer(tab.cookieStoreId);
+        }
+        return;
+      }
+    }
+
+    // Check for permanent container
     if (newDomain) {
       const targetContainerId = await getContainerForDomain(tab.url);
 
@@ -1098,16 +1161,36 @@ browser.runtime.onMessage.addListener(async (message) => {
       };
     } else if (message.action === 'sortRules') {
       logDebug('Processing sortRules message');
-      const { rules = '' } = await browser.storage.local.get('rules');
+
+      const { rules = '', overrideRules = '' } = await browser.storage.local.get(['rules', 'overrideRules']);
       const sortedRules = sortRules(rules);
-      // Only save if sorting actually changed something and didn't fail
+      const sortedOverrides = sortRules(overrideRules);
+
+      // Object to hold any changed rules
+      const updates = {};
+
+      // Check standard rules
       if (sortedRules !== rules && sortedRules !== null && sortedRules !== undefined) {
-        logDebug('Rules changed, saving sorted version');
-        await browser.storage.local.set({ rules: sortedRules });
-        logDebug('Sorted rules saved');
+        logDebug('Rules changed, queuing sorted version');
+        updates.rules = sortedRules;
       } else {
         logDebug('Rules unchanged after sorting');
       }
+
+      // Check override rules
+      if (sortedOverrides !== overrideRules && sortedOverrides !== null && sortedOverrides !== undefined) {
+        logDebug('Override rules changed, queuing sorted version');
+        updates.overrideRules = sortedOverrides;
+      } else {
+        logDebug('Override rules unchanged after sorting');
+      }
+
+      // If any changes were queued, save them
+      if (Object.keys(updates).length > 0) {
+        await browser.storage.local.set(updates);
+        logDebug(`Saved sorted rules to storage: ${Object.keys(updates).join(', ')}`);
+      }
+
       return { success: true };
     }
   } catch (error) {

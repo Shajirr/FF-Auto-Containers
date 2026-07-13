@@ -7,12 +7,16 @@
     <link rel="stylesheet" href="chrome://global/skin/in-content/common.css" />
     <style>
       body {
-        margin: 20px;
+        margin: 10px 20px;
         font-family: -moz-system, system-ui, sans-serif;
       }
       h3 {
         font-size: 1.2em;
         margin-bottom: 0.5em;
+        margin-top: 0.5em;
+      }
+      h3:first-of-type {
+        margin-top: 0;
       }
       p {
         line-height: 1.4;
@@ -24,7 +28,6 @@
         font-family: monospace;
         padding: 5px;
         box-sizing: border-box;
-        margin-bottom: 1em;
       }
       .save-message {
         display: inline-block;
@@ -163,8 +166,8 @@
       Permanent Containers: <span id="permanentContainers">0</span><br />
       Temporary Containers: <span id="temporaryContainers">0</span>
     </p>
-    <h3>Container Rules</h3>
 
+    <h3>Container Rules</h3>
     <p>
       Enter rules to assign domains or URL patterns to specific permanent containers.<br />
       Format:
@@ -195,8 +198,8 @@
         <strong>#Default</strong> - matched address will always open is the default Firefox container (same as no
         container)<br />
         <strong>#Ignore</strong> - addon does nothing, so matched address will open in the same container (or no
-        container) as the active tab.<br />
-        <br /><strong>Examples:</strong><br />
+        container) as the active tab.<br /><br />
+        <strong>Examples:</strong><br />
         <code>example.com, #Default</code> - example.com will open in the default Firefox container (same as no
         container)<br />
         <code>example.com, #Ignore</code> - example.com will open in the same container as the active tab. If you are
@@ -207,15 +210,41 @@
       <textarea
         id="containerRules"
         placeholder="Enter rules, one per line, like:
-youtube.com, YT
-google.com, GL"
+        youtube.com, YT
+        google.com, GL"
+      ></textarea>
+    </p>
+
+    <h3>Override Rules</h3>
+    <p>
+      Override rules intercept navigation before standard rules, allowing tabs to stay in their current container on
+      domain change.<br />
+      Format:
+      <code>Pattern, Container 1, Container 2, ...</code><br />
+      One rule per line.<br />
+
+      <details id="override-instructions">
+        <summary>Show override rule instructions / examples</summary>
+        If a matched domain allows the tab's current container, the tab stays in that container.<br />
+        A single rule can contain multiple containers, separated by commas.<br /><br />
+        <strong>Examples:</strong><br />
+        <code>accounts.google.com, Gmail, YouTube</code> - if navigating to accounts.google.com, allow the tab to stay
+        in the Gmail or YouTube containers without isolating.<br />
+        <code>login.microsoftonline.com, Work, Personal</code> - prevents switching when logging into Microsoft if
+        already in Work or Personal containers.<br /><br />
+      </details>
+
+      <textarea
+        id="overrideRules"
+        placeholder="Enter override rules, one per line, like:
+accounts.google.com, Gmail, YouTube"
       ></textarea>
     </p>
 
     <h3>Temporary Containers Default Style</h3>
     <p>
-      Choose the default color and icon for new temporary containers.<br />
-      Select "Random" to pick a different color or icon each time a new temporary container is created.
+      Choose the default colour and icon for new temporary containers.<br />
+      Select "Random" to pick a different colour or icon each time a new temporary container is created.
     </p>
 
     <div class="style-controls">
@@ -232,7 +261,7 @@ google.com, GL"
     <div class="random-options" style="margin-top: 12px; display: flex; gap: 16px">
       <label style="display: flex; align-items: center; gap: 6px; cursor: pointer">
         <input type="checkbox" id="randomColor" />
-        <span>Random color</span>
+        <span>Random colour</span>
       </label>
       <label style="display: flex; align-items: center; gap: 6px; cursor: pointer">
         <input type="checkbox" id="randomIcon" />
