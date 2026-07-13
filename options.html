@@ -156,6 +156,23 @@
       details summary::-webkit-details-marker {
         display: none;
       }
+
+      /* Domain hop dialog styles */
+      dialog::backdrop {
+        background: rgba(0, 0, 0, 0.5);
+      }
+
+      dialog {
+        border: 1px solid CanvasText;
+        border-radius: 8px;
+        background: Canvas;
+        color: CanvasText;
+        width: 80%;
+        max-width: 600px;
+        padding: 20px;
+        box-sizing: border-box;
+        overflow-x: hidden;
+      }
     </style>
     <script src="options.js" defer></script>
   </head>
@@ -210,8 +227,8 @@
       <textarea
         id="containerRules"
         placeholder="Enter rules, one per line, like:
-        youtube.com, YT
-        google.com, GL"
+youtube.com, YT
+google.com, GL"
       ></textarea>
     </p>
 
@@ -240,6 +257,21 @@
 accounts.google.com, Gmail, YouTube"
       ></textarea>
     </p>
+
+    <h3>Domain Hop Tracker</h3>
+    <p>
+      Use this to record domain changes during navigation/redirects<br />
+      <button id="toggleTrackerBtn" style="margin-top: 5px; min-width: 150px">▶ Start Tracker</button>
+    </p>
+
+    <dialog id="hopLogModal">
+      <h3 style="margin-top: 0">Domain hop recording results</h3>
+      <p>Copy any required intermediary domains to your Override Rules.</p>
+      <textarea id="hopLogResult" readonly style="height: 250px; margin-bottom: 15px"></textarea>
+      <div style="text-align: right">
+        <button id="closeModalBtn">Close</button>
+      </div>
+    </dialog>
 
     <h3>Temporary Containers Default Style</h3>
     <p>

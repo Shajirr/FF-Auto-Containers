@@ -17,6 +17,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   const saveButton = document.getElementById('saveButton');
   const saveMessage = document.getElementById('save-message');
 
+  // Domain hop tracking elements
+  const toggleTrackerBtn = document.getElementById('toggleTrackerBtn');
+  const hopLogModal = document.getElementById('hopLogModal');
+  const hopLogResult = document.getElementById('hopLogResult');
+  const closeModalBtn = document.getElementById('closeModalBtn');
+
   // Elements for temp container style
   const colorGrid = document.getElementById('colorGrid');
   const iconGrid = document.getElementById('iconGrid');
@@ -48,7 +54,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     rules = '',
     overrideRules = '',
     notifications = true,
-  } = await browser.storage.local.get(['rules', 'overrideRules', 'notifications']);
+    isRecordingHops = false,
+  } = await browser.storage.local.get(['rules', 'overrideRules', 'notifications', 'isRecordingHops']);
 
   // Load default temp container style
   const { tempContainerStyle = { color: 'blue', icon: 'circle', randomColor: false, randomIcon: false } } =
@@ -59,7 +66,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   randomColorCheckbox.checked = tempContainerStyle.randomColor || false;
   randomIconCheckbox.checked = tempContainerStyle.randomIcon || false;
 
-  // Firefox contextual identity colors and icons
+  // Firefox contextual identity colours and icons
   const COLORS = ['blue', 'turquoise', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'toolbar'];
   const ICONS = [
     'fingerprint',
@@ -77,7 +84,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     'fence',
   ];
 
-  // Helper: get CSS color value
+  // Helper: get CSS colour value
   function getColorValue(color) {
     const colors = {
       blue: '#37adff',
@@ -92,7 +99,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     return colors[color] || '#37adff';
   }
 
-  // Populate color swatches
+  // Populate colour swatches
   COLORS.forEach((color) => {
     const swatch = document.createElement('button');
     swatch.type = 'button';
@@ -146,7 +153,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (randomColorCheckbox.checked) {
       colorGrid.querySelectorAll('.color-swatch').forEach((s) => s.classList.remove('selected'));
     } else {
-      // re-select the stored color if any
+      // re-select the stored colour if any
       const swatch = colorGrid.querySelector(`[data-color="${selectedColor}"]`);
       if (swatch) swatch.classList.add('selected');
     }
@@ -267,7 +274,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     if (!isValid && lines.length > 0) {
-      let errorMessage = '';
+      let errorMessage;
       switch (errorType) {
         case 'format':
           errorMessage = `[${ruleListName}] Invalid format on line ${invalidLineNumber}: "${invalidLine}". Each rule must be in the format: Pattern, Name (e.g., youtube.com, YT)`;
@@ -286,6 +293,44 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     return null; // Indicates successful validation
   }
+
+  // Domain hop tracking
+  let trackingActive = isRecordingHops;
+
+  function updateTrackerButtonUI() {
+    if (trackingActive) {
+      toggleTrackerBtn.textContent = '⏹ Stop Tracker';
+      toggleTrackerBtn.style.backgroundColor = '#ff613d'; // Firefox red
+      toggleTrackerBtn.style.color = 'white';
+    } else {
+      toggleTrackerBtn.textContent = '▶ Start Tracker';
+      toggleTrackerBtn.style.backgroundColor = '';
+      toggleTrackerBtn.style.color = '';
+    }
+  }
+
+  updateTrackerButtonUI();
+
+  toggleTrackerBtn.addEventListener('click', async () => {
+    trackingActive = !trackingActive;
+    updateTrackerButtonUI();
+
+    if (trackingActive) {
+      // Start tracking: clear old hops and enable flag
+      await browser.storage.local.set({ isRecordingHops: true, domainHops: [] });
+    } else {
+      // Stop tracking: disable flag, fetch results, and show modal
+      await browser.storage.local.set({ isRecordingHops: false });
+      const { domainHops = [] } = await browser.storage.local.get('domainHops');
+
+      hopLogResult.value =
+        domainHops.length > 0 ? domainHops.join('\n') : 'No domain hops detected during this tracking session.';
+
+      hopLogModal.showModal();
+    }
+  });
+
+  closeModalBtn.addEventListener('click', () => hopLogModal.close());
 
   // Save settings
   saveButton.addEventListener('click', async () => {

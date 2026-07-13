@@ -35,6 +35,7 @@ const ICONS = ['fingerprint', 'briefcase', 'dollar', 'cart', 'vacation',
 // Safeguard: Track processing operations to prevent infinite loops
 const MAX_PROCESSING_PER_TAB = 3;
 const tabProcessingCount = new Map();
+
 function incrementProcessingCount(tabId) {
   const count = tabProcessingCount.get(tabId) || 0;
   tabProcessingCount.set(tabId, count + 1);
@@ -62,6 +63,34 @@ function getDomain(url) {
   } catch (e) {
     console.error('Invalid URL:', url, e);
     return '';
+  }
+}
+
+// Records cross-domain navigations
+async function recordDomainHop(fromDomain, toDomain) {
+  if (!toDomain || fromDomain === toDomain) return; // Skip matching domains or blank URLs
+
+  try {
+    const { isRecordingHops = false, domainHops = [] } = await browser.storage.local.get([
+      'isRecordingHops',
+      'domainHops',
+    ]);
+
+    if (!isRecordingHops) return; // Only record when tracker is explicitly started
+
+    const timestamp = new Date().toLocaleTimeString([], { hour12: false });
+    const formattedFrom = fromDomain || '(new tab)';
+
+    // Log format: [time] domain1 -> domain2
+    const logEntry = `[${timestamp}] ${formattedFrom} ➔ ${toDomain}`;
+
+    domainHops.push(logEntry); // Append chronologically
+    if (domainHops.length > 50) domainHops.shift();
+
+    await browser.storage.local.set({ domainHops });
+    logDebug(`[Domain Hop Tracker] Entry recorded: ${logEntry}`);
+  } catch (error) {
+    console.error('[Domain Hop Tracker] Failed to write domain hop entry:', error);
   }
 }
 
@@ -893,6 +922,9 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
     // Handle special reserved container names
     if (targetContainerId === '#Ignore') {
       logDebug(`Rule #Ignore matched for ${newUrl}, skipping container assignment.`);
+      if (currentDomain !== newDomain) {
+        recordDomainHop(currentDomain, newDomain).catch(console.error);
+      }
       tabUrls.set(tabId, newUrl); // Still track URL but don't move tab
       return;
     }
@@ -941,6 +973,9 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
     // don't replace it, even if currentDomain is unknown (session restore).
     if (targetContainerId && tab.cookieStoreId === targetContainerId) {
       logDebug(`Tab ${tabId} already satisfies rule for ${newDomain} (${targetContainerId}). Skipping.`);
+      if (currentDomain !== newDomain && currentDomain) {
+        recordDomainHop(currentDomain, newDomain).catch(console.error);
+      }
       tabUrls.set(tabId, newUrl);
       return;
     }
@@ -993,6 +1028,10 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
         shouldReplace = true;
         reason = `same domain but wrong container: ${tab.cookieStoreId} -> ${targetContainerId}`;
       }
+    }
+
+    if (currentDomain !== newDomain) {
+      recordDomainHop(currentDomain, newDomain).catch(console.error);
     }
 
     if (shouldReplace) {
@@ -1049,6 +1088,7 @@ async function handleNewTab(tab) {
     // Fetch opener tab once here so it's available for both the same-domain check below
     // and the final fallback condition, avoiding a redundant browser.tabs.get() call
     const openerTab = tab.openerTabId ? await browser.tabs.get(tab.openerTabId).catch(() => null) : null;
+    const openerDomain = openerTab ? getDomain(openerTab.url) : '';
 
     // Override list check for inherited containers
     if (currentContainer && currentContainer.name !== 'firefox-default') {
@@ -1057,6 +1097,9 @@ async function handleNewTab(tab) {
         logDebug(
           `New tab ${tab.id} matched override rule for ${tab.url} in inherited container ${currentContainer.name}. Staying.`,
         );
+        if (openerDomain && openerDomain !== newDomain) {
+          recordDomainHop(openerDomain, newDomain).catch(console.error);
+        }
         if (isTempContainer) {
           startDeletionTimer(tab.cookieStoreId);
         }
@@ -1076,6 +1119,9 @@ async function handleNewTab(tab) {
 
       if (targetContainerId && tab.cookieStoreId !== targetContainerId) {
         logDebug(`Replacing tab ${tab.id} with permanent container: ${targetContainerId}`);
+        if (openerDomain && openerDomain !== newDomain) {
+          recordDomainHop(openerDomain, newDomain).catch(console.error);
+        }
         await replaceTab(tab, tab.url);
         return;
       } else if (targetContainerId) {
@@ -1109,6 +1155,9 @@ async function handleNewTab(tab) {
     // If no permanent container or opener match, assign a new temporary container
     if (!isTempContainer || (openerTab && getDomain(tab.url) !== getDomain(openerTab.url))) {
       logDebug(`Replacing tab ${tab.id} with temporary container`);
+      if (openerDomain && openerDomain !== newDomain) {
+        recordDomainHop(openerDomain, newDomain).catch(console.error);
+      }
       await replaceTab(tab, tab.url);
     } else {
       logDebug(`Tab ${tab.id} already in a suitable temporary container: ${tab.cookieStoreId}`);
