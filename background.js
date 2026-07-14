@@ -95,51 +95,6 @@ async function recordDomainHop(fromDomain, toDomain) {
   }
 }
 
-// Domain hop tracking listener
-browser.webNavigation.onBeforeNavigate.addListener(
-  async (details) => {
-    // Ignore embedded iframes
-    if (details.frameId !== 0) return;
-
-    // Check if tracking is enabled
-    if (!isRecordingHops) return;
-
-    try {
-      const newDomain = getDomain(details.url);
-      if (!newDomain) return;
-
-      let oldDomain = trackerTabDomains.get(details.tabId);
-
-      // If this tab isn't in the tracking map yet, deduce the old domain
-      if (!oldDomain) {
-        const tab = await browser.tabs.get(details.tabId).catch(() => null);
-        if (tab) {
-          oldDomain = getDomain(tab.url);
-
-          // If the tab is still entirely blank (a brand-new tab), check its opener
-          if (!oldDomain && tab.openerTabId) {
-            const openerTab = await browser.tabs.get(tab.openerTabId).catch(() => null);
-            if (openerTab) {
-              oldDomain = getDomain(openerTab.url);
-            }
-          }
-        }
-      }
-
-      // Record the hop if there's a valid transition
-      if (oldDomain && oldDomain !== newDomain) {
-        await recordDomainHop(oldDomain, newDomain);
-      }
-
-      // Update the state for this tab so chained redirects are tracked accurately
-      trackerTabDomains.set(details.tabId, newDomain);
-    } catch (error) {
-      console.error('[Domain Hop Tracker] Error in the listener:', error);
-    }
-  },
-  { url: [{ schemes: ['http', 'https'] }] },
-);
-
 // Function to get all temporary containers
 async function getTempContainers() {
   const identities = await browser.contextualIdentities.query({});
@@ -842,26 +797,66 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
-// Handle navigation events for domain changes
+// Handles cross-domain transition recording and domain isolation on navigation events
 browser.webNavigation.onBeforeNavigate.addListener(
   async (details) => {
-    if (details.frameId !== 0) return; // Only handle main frame navigations
+    if (details.frameId !== 0) return; // Only handle main frame navigations, ignore embedded iframes
 
     const tabId = details.tabId;
 
-    // Check if tab is excluded from domain isolation
-    if (excludedTabs.has(tabId)) {
-      logDebug(`Tab ${tabId} is excluded from domain isolation, skipping navigation handling`);
-      const newUrl = details.url;
-      tabUrls.set(tabId, newUrl); // Still update stored URL for tracking
+    // Domain hop recording logic
+    if (isRecordingHops) {
+      try {
+        const newDomain = getDomain(details.url);
+        if (newDomain) {
+          let oldDomain = trackerTabDomains.get(tabId);
+          // If this tab isn't in the tracking map yet, deduce the old domain
+          if (!oldDomain) {
+            const tab = await browser.tabs.get(tabId).catch(() => null);
+            if (tab) {
+              oldDomain = getDomain(tab.url);
 
-      // Update badge to ensure it shows after navigation
-      await updateTabBadge(tabId);
-      return;
+              // If the tab is still entirely blank (a brand-new tab), check its opener
+              if (!oldDomain && tab.openerTabId) {
+                const openerTab = await browser.tabs.get(tab.openerTabId).catch(() => null);
+                if (openerTab) {
+                  oldDomain = getDomain(openerTab.url);
+                }
+              }
+            }
+          }
+
+          // Record the hop if there's a valid transition
+          if (oldDomain && oldDomain !== newDomain) {
+            await recordDomainHop(oldDomain, newDomain);
+          }
+
+          // Update the state for this tab so chained redirects are tracked accurately
+          trackerTabDomains.set(tabId, newDomain);
+        }
+      } catch (error) {
+        console.error('[Domain Hop Tracker] Error in the listener:', error);
+      }
     }
 
-    // Call shared container logic
-    await handleContainerChangeOnNavigation(tabId, details.url);
+    // Main container-related logic
+    try {
+      // Check if tab is excluded from domain isolation
+      if (excludedTabs.has(tabId)) {
+        logDebug(`Tab ${tabId} is excluded from domain isolation, skipping navigation handling`);
+        const newUrl = details.url;
+        tabUrls.set(tabId, newUrl); // Still update stored URL for tracking
+
+        // Update badge to ensure it shows after navigation
+        await updateTabBadge(tabId);
+        return;
+      }
+
+      // Call shared container logic
+      await handleContainerChangeOnNavigation(tabId, details.url);
+    } catch (error) {
+      console.error(`Error in onBeforeNavigate core logic for tab ${tabId}:`, error);
+    }
   },
   { url: [{ schemes: ['http', 'https'] }] },
 );
