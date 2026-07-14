@@ -13,7 +13,7 @@
       h3 {
         font-size: 1.2em;
         margin-bottom: 0.5em;
-        margin-top: 0.5em;
+        margin-top: 0.75em;
       }
       h3:first-of-type {
         margin-top: 0;
@@ -187,13 +187,12 @@
     <h3>Container Rules</h3>
     <p>
       Enter rules to assign domains or URL patterns to specific permanent containers.<br />
-      Format:
-      <code>Pattern, Container name</code><br />
-      One rule per line.<br />
 
       <details id="rules-instructions">
         <summary>Show rule instructions / examples</summary>
-
+        <strong>Format:</strong><br />
+        <code>Pattern, Container name</code><br />
+        One rule per line.<br />
         '*' wildcards are supported, matching any number of any characters
         <br />
         <br />
@@ -234,16 +233,18 @@ google.com, GL"
 
     <h3>Override Rules</h3>
     <p>
-      Override rules intercept navigation before standard rules, allowing tabs to stay in their current container on
-      domain change.<br />
-      Format:
-      <code>Pattern, Container 1, Container 2, ...</code><br />
-      One rule per line.<br />
-
+      Enter override rules that allow tabs to say in their current container on domain change.<br />
       <details id="override-instructions">
         <summary>Show override rule instructions / examples</summary>
+        Override rules intercept navigation before standard rules, allowing tabs to stay in their current container on
+        domain change. Useful for cases when data must be transferred between different domains, like cross-domain login
+        flows.<br /><br />
+        <strong>Format:</strong><br />
+        <code>Pattern, Container 1, Container 2, ...</code><br />
+        One rule per line.<br />
+        A single rule can contain multiple containers, separated by commas.<br />
         If a matched domain allows the tab's current container, the tab stays in that container.<br />
-        A single rule can contain multiple containers, separated by commas.<br /><br />
+        <br />
         <strong>Examples:</strong><br />
         <code>accounts.google.com, Gmail, YouTube</code> - if navigating to accounts.google.com, allow the tab to stay
         in the Gmail or YouTube containers without isolating.<br />
