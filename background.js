@@ -220,7 +220,7 @@ async function getContainerForDomain(url) {
   try {
     const { rules = '', containerStyles = {} } = await browser.storage.local.get(['rules', 'containerStyles']);
     const ruleLines = rules.split('\n').filter((line) => line.trim() !== '');
-    logDebug(`Loaded ${ruleLines.length} rules:`, ruleLines);
+    logDebug(`Loaded ${ruleLines.length} rules`);
 
     if (ruleLines.length === 0) {
       logDebug('No rules available');
@@ -1028,12 +1028,10 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
         // Case 1: Tab is in default container but needs a specific container
         shouldReplace = true;
         reason = `moving from default container to specific container: ${targetContainerId}`;
-      } else if (!targetContainerId && newDomain !== currentDomain) {
-        // Case 2: No rule found, but domain changed -> isolate in new temporary container
-        if (currentDomain !== null) {
-          shouldReplace = true;
-          reason = `moving from default container to temp container for domain change`;
-        }
+      } else if (!targetContainerId && newDomain) {
+        // Case 2: No rule found, and navigating to a valid domain -> isolate in a new temporary container
+        shouldReplace = true;
+        reason = `moving from default container to temp container (no rule matched)`;
       }
       // If isTargetDefault is true, do nothing (stay in default)
     } else {
