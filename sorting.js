@@ -1,7 +1,10 @@
+export { sortRules, extractBaseDomain };
+
 let DEBUG = false;
+const debugPrefix = '[AC]';
 
 function logDebug(...args) {
-  if (DEBUG) console.log(...args);
+  if (DEBUG) console.log(debugPrefix, ...args);
 }
 
 // Helper function to extract base domain for grouping
@@ -371,5 +374,3 @@ function sortRules(rulesText) {
     return rulesText; // Return original rules if sorting fails
   }
 }
-
-export { sortRules, extractBaseDomain };

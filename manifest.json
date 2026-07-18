@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Auto Containers",
-  "version": "2026.7.14",
+  "version": "2026.7.18",
   "description": "Automatically opens tabs in either temporary or permanent containers for domain isolation.",
 
   "browser_specific_settings": {
@@ -21,7 +21,8 @@
     "notifications",
     "webNavigation",
     "activeTab",
-    "contextMenus"
+    "contextMenus",
+    "sessions"
   ],
 
   "background": {

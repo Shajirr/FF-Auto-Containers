@@ -1,13 +1,15 @@
 import { sortRules } from './sorting.js';
+import { getTabHistory, setTabHistory, synchronizedUpdateHistory, clearTabHistory } from './tabHistory.js';
+import { getDomain, getContainerForDomain, checkOverrideRules } from './containerRules.js';
+import { createTempContainer, getTempContainers, startDeletionTimer, cancelDeletionTimer } from './tempContainers.js';
 
 let DEBUG = false;
+const debugPrefix = '[AC]';
 
 function logDebug(...args) {
-  if (DEBUG) console.log(...args);
+  if (DEBUG) console.log(debugPrefix, ...args);
 }
 
-// Map to store deletion timers for temporary containers
-const deletionTimers = new Map();
 // Set to track tabs being processed to avoid duplicate actions
 const processingTabs = new Set();
 // Set to track tabs waiting for URL updates
@@ -22,6 +24,8 @@ const addonCreatedTabs = new Set();
 const trackerTabDomains = new Map();
 // Boolean to track if domain hop tracking is active
 let isRecordingHops = false;
+// Array to store history menu IDs
+let historyMenuIds = [];
 
 // Domain isolation exclusion tracking
 const excludedTabs = new Set(); // all excluded tabs (perm + temp)
@@ -30,11 +34,6 @@ const tabToExclusionTimer = new Map(); // tabId -> timerId (shared across inheri
 const exclusionGroups = new Map(); // timerId -> Set<tabId> (all tabs sharing the same timer)
 
 const EXCLUSION_TIMER = 30 * 60 * 1000; // in ms
-
-const COLORS = ['blue', 'turquoise', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'toolbar'];
-// prettier-ignore
-const ICONS = ['fingerprint', 'briefcase', 'dollar', 'cart', 'vacation',
-  'gift', 'food', 'fruit', 'pet', 'tree', 'chill', 'circle', 'fence'];
 
 // Safeguard: Track processing operations to prevent infinite loops
 const MAX_PROCESSING_PER_TAB = 3;
@@ -52,22 +51,6 @@ function incrementProcessingCount(tabId) {
 
 function resetProcessingCount(tabId) {
   tabProcessingCount.delete(tabId);
-}
-
-function getDomain(url) {
-  if (!url || url === 'about:blank' || url === 'about:newtab') {
-    return '';
-  }
-  // Skip extension pages
-  if (url.startsWith('moz-extension://')) {
-    return '';
-  }
-  try {
-    return new URL(url).hostname.replace(/^www\./, '');
-  } catch (e) {
-    console.error('Invalid URL:', url, e);
-    return '';
-  }
 }
 
 // Records cross-domain navigations
@@ -93,31 +76,6 @@ async function recordDomainHop(fromDomain, toDomain) {
   } catch (error) {
     console.error('[Domain Hop Tracker] Failed to write domain hop entry:', error);
   }
-}
-
-// Function to get all temporary containers
-async function getTempContainers() {
-  const identities = await browser.contextualIdentities.query({});
-  return identities.filter((identity) => /^tmp_\d+$/.test(identity.name));
-}
-
-// Function to get the next available container number
-async function getNextContainerNumber() {
-  const tempContainers = await getTempContainers();
-  const numbers = tempContainers
-    .map((container) => parseInt(container.name.split('_')[1], 10))
-    .filter((num) => !isNaN(num))
-    .sort((a, b) => a - b);
-  let nextNum = 1;
-  while (numbers.includes(nextNum)) {
-    nextNum++;
-  }
-  return nextNum;
-}
-
-// Get random colour or icon
-function getRandomItem(array) {
-  return array[Math.floor(Math.random() * array.length)];
 }
 
 // Function to update badge for excluded tabs
@@ -173,6 +131,100 @@ function clearTabExclusionTimer(tabId) {
   }
 }
 
+// Replace a tab with a new one in a temporary or permanent container
+// targetCookieStoreId: optional pre-resolved container ID; skips getContainerForDomain if provided
+async function replaceTab(tab, newUrl = null, targetCookieStoreId = null) {
+  const originalTabId = tab.id;
+
+  // Resolve the target URL first so it can be validated
+  const targetUrl = newUrl || (tab.url && !['about:blank', 'about:newtab'].includes(tab.url) ? tab.url : null);
+
+  // Comprehensive Privileged/Invalid URL check.
+  // Check targetUrl here because that is what browser.tabs.create will eventually use.
+  if (
+    !targetUrl ||
+    targetUrl.startsWith('about:') ||
+    targetUrl.startsWith('chrome:') ||
+    targetUrl.startsWith('resource:')
+  ) {
+    logDebug(`Skipping replaceTab for blank or privileged URL: ${targetUrl || 'No URL'}`);
+    // Clean up the lock on early return
+    processingTabs.delete(originalTabId);
+    return tab;
+  }
+
+  // Grab existing history before deleting the tab
+  const existingHistory = await getTabHistory(originalTabId);
+
+  const originalIndex = tab.index;
+  const windowId = tab.windowId;
+
+  // Logging setup (for debugging)
+  const container = tab.cookieStoreId
+    ? await browser.contextualIdentities.get(tab.cookieStoreId).catch(() => null)
+    : null;
+  const containerName = container ? container.name : tab.cookieStoreId === 'firefox-default' ? 'Default' : 'unknown';
+  const isTempContainer = container && /^tmp_\d+$/.test(container.name);
+  logDebug(
+    `replaceTab: Tab ${originalTabId}, URL: ${targetUrl}, container: ${containerName} (${tab.cookieStoreId}), isTemp: ${isTempContainer}`,
+  );
+
+  // Resolve the CookieStoreId
+  let cookieStoreId = targetCookieStoreId;
+
+  if (!cookieStoreId) {
+    const domain = getDomain(targetUrl);
+    if (domain) {
+      cookieStoreId = await getContainerForDomain(targetUrl);
+    }
+  }
+
+  if (!cookieStoreId) {
+    logDebug(`No rule found for ${targetUrl}. Creating temporary isolation container.`);
+    const tempContainer = await createTempContainer();
+    cookieStoreId = tempContainer.cookieStoreId;
+  }
+
+  try {
+    const newTab = await browser.tabs.create({
+      url: targetUrl,
+      cookieStoreId: cookieStoreId,
+      index: originalIndex,
+      windowId: windowId,
+      active: tab.active,
+    });
+
+    // Transfer history to the new tab
+    if (existingHistory.length > 0) {
+      logDebug(`Transferring history to new tab: ${newTab.id}`);
+      await setTabHistory(newTab.id, existingHistory);
+    }
+
+    addonCreatedTabs.add(newTab.id);
+    logDebug(`Created new tab at index: ${originalIndex}, new tab id: ${newTab.id}, container: ${cookieStoreId}`);
+
+    // Remove original tab
+    try {
+      await browser.tabs.get(originalTabId);
+      await browser.tabs.remove(originalTabId);
+      logDebug(`Removed original tab: ${originalTabId}`);
+    } catch (error) {
+      console.warn(`Original tab ${originalTabId} no longer exists, skipping removal`);
+    }
+
+    if (targetUrl) {
+      tabUrls.set(newTab.id, targetUrl);
+    }
+    return newTab;
+  } catch (error) {
+    console.error(`Error in replaceTab for tab ${originalTabId}:`, error);
+    throw error;
+  } finally {
+    // Ensure the lock is always released
+    processingTabs.delete(originalTabId);
+  }
+}
+
 // Centralized inheritance logic (temporary, shared timer across chain)
 async function inheritExclusion(newTabId, sourceTabId) {
   if (excludedTabs.has(newTabId)) {
@@ -213,366 +265,6 @@ async function inheritExclusion(newTabId, sourceTabId) {
   }
 
   await updateTabBadge(newTabId);
-}
-
-// Function to check rules for permanent container
-async function getContainerForDomain(url) {
-  try {
-    const { rules = '', containerStyles = {} } = await browser.storage.local.get(['rules', 'containerStyles']);
-    const ruleLines = rules.split('\n').filter((line) => line.trim() !== '');
-    logDebug(`Loaded ${ruleLines.length} rules`);
-
-    if (ruleLines.length === 0) {
-      logDebug('No rules available');
-      return null;
-    }
-
-    const domain = getDomain(url);
-    if (!domain) {
-      logDebug(`Invalid domain for URL: ${url}`);
-      return null;
-    }
-
-    logDebug(`Checking rules sequentially for URL: ${url}, domain: ${domain}`);
-
-    let rulesChecked = 0;
-
-    for (const line of ruleLines) {
-      // Split only on the first comma so container names can contain commas
-      const firstComma = line.indexOf(',');
-      if (firstComma === -1) continue; // skip invalid rule
-      const rulePattern = line.substring(0, firstComma).trim();
-      const containerName = line.substring(firstComma + 1).trim();
-      rulesChecked++;
-
-      if (matchesRule(url, domain, rulePattern)) {
-        logDebug(`Rule ${rulePattern} matched! Matches container: ${containerName}, rules checked: ${rulesChecked}`);
-
-        // Handling special reserved container names
-        if (containerName === '#Default') {
-          return 'firefox-default';
-        }
-        if (containerName === '#Ignore') {
-          return '#Ignore'; // Signal string to stop processing
-        }
-
-        const identities = await browser.contextualIdentities.query({ name: containerName });
-        if (identities.length > 0) {
-          logDebug(
-            `Found existing container: ${containerName} (${identities[0].cookieStoreId}) for pattern: ${rulePattern}`,
-          );
-          return identities[0].cookieStoreId;
-        }
-        // Apply saved styles when creating container
-        const styles = containerStyles[containerName] || { color: 'blue', icon: 'circle' };
-        const identity = await browser.contextualIdentities.create({
-          name: containerName,
-          color: styles.color,
-          icon: styles.icon,
-        });
-        logDebug(`Created container: ${containerName} (${identity.cookieStoreId}) for pattern: ${rulePattern}`);
-        return identity.cookieStoreId;
-      }
-    }
-
-    logDebug(`No rules matched for URL: ${url}, checked all ${ruleLines.length} rules`);
-    return null;
-  } catch (error) {
-    console.error(`Error in getContainerForDomain for URL: ${url}`, error);
-    return null;
-  }
-}
-
-// Function to check override rules that allow staying in current container
-async function checkOverrideRules(url, containerName) {
-  if (!containerName || containerName === 'firefox-default') return false;
-
-  try {
-    const { overrideRules = '' } = await browser.storage.local.get('overrideRules');
-    const ruleLines = overrideRules.split('\n').filter((line) => line.trim() !== '');
-
-    if (ruleLines.length === 0) return false;
-
-    const domain = getDomain(url);
-    if (!domain) return false;
-
-    for (const line of ruleLines) {
-      const firstComma = line.indexOf(',');
-      if (firstComma === -1) continue;
-
-      const rulePattern = line.substring(0, firstComma).trim();
-      // Supports checking against multiple comma-separated allowed containers per domain rule
-      const allowedContainers = line
-        .substring(firstComma + 1)
-        .split(',')
-        .map((c) => c.trim())
-        .filter((c) => c !== '');
-
-      if (allowedContainers.includes(containerName) && matchesRule(url, domain, rulePattern)) {
-        logDebug(`Override rule matched: ${rulePattern} allows staying in ${containerName}`);
-        return true;
-      }
-    }
-  } catch (error) {
-    console.error(`Error in checkOverrideRules for URL: ${url}`, error);
-  }
-  return false;
-}
-
-// Function to check if a URL matches a rule pattern
-function matchesRule(url, domain, rulePattern) {
-  try {
-    const urlObj = new URL(url);
-    // Handle different rule pattern types:
-    // 1. URL path or query patterns (contains /)
-    if (rulePattern.includes('/')) {
-      // Split pattern into domain, path, and query parts
-      const [patternDomain, ...pathAndQueryParts] = rulePattern.split('/');
-      const patternPathFull = '/' + pathAndQueryParts.join('/');
-      const queryIndex = patternPathFull.indexOf('?');
-      const hasQuery = queryIndex !== -1;
-      const cleanPatternPath = hasQuery ? patternPathFull.substring(0, queryIndex) : patternPathFull;
-      const patternQuery = hasQuery ? patternPathFull.substring(queryIndex) : '';
-      // Normalize domains (remove www.)
-      const urlDomain = urlObj.hostname.replace(/^www\./, '');
-      // Check domain with wildcard support
-      if (!matchesDomainPattern(urlDomain, patternDomain)) {
-        //logDebug(`Domain mismatch: urlDomain=${urlDomain}, patternDomain=${patternDomain}`);
-        return false;
-      }
-      // Check if URL path matches pattern path
-      if (cleanPatternPath.includes('*')) {
-        // Convert pattern path to regex for wildcard support
-        let regexPath = cleanPatternPath
-          .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // Escape regex special chars
-          .replace(/\*/g, '.*'); // Convert * to .*
-        regexPath = '^' + regexPath + '(/.*)?$'; // Match path and optional trailing segments
-        logDebug(
-          `Path regex test: urlPath=${urlObj.pathname}, regex=${regexPath}, result=${new RegExp(regexPath).test(urlObj.pathname)}`,
-        );
-        return new RegExp(regexPath).test(urlObj.pathname);
-      } else {
-        // Match exact path, path with query parameters, or path with trailing slash
-        const pathResult =
-          urlObj.pathname === cleanPatternPath ||
-          urlObj.pathname === cleanPatternPath + '/' ||
-          urlObj.pathname.startsWith(cleanPatternPath + '/') ||
-          urlObj.pathname.startsWith(cleanPatternPath + '?');
-        logDebug(`Path comparison: urlPath=${urlObj.pathname}, patternPath=${cleanPatternPath}, result=${pathResult}`);
-        // Check query parameters if present in rule
-        if (hasQuery && pathResult) {
-          // Split pattern query into parameters
-          const patternParams = new URLSearchParams(patternQuery);
-          const urlParams = new URLSearchParams(urlObj.search);
-          let queryResult = true;
-          for (const [key, value] of patternParams) {
-            if (!urlParams.has(key) || (value !== '' && urlParams.get(key) !== value)) {
-              queryResult = false;
-              break;
-            }
-          }
-          logDebug(`Query comparison: urlQuery=${urlObj.search}, patternQuery=${patternQuery}, result=${queryResult}`);
-          return queryResult;
-        }
-        return pathResult;
-      }
-    }
-    // 2. Domain-only patterns (no /)
-    else {
-      const urlDomain = urlObj.hostname.replace(/^www\./, '');
-      const result = matchesDomainPattern(urlDomain, rulePattern);
-      //logDebug(`Domain-only pattern test: urlDomain=${urlDomain}, pattern=${rulePattern}, result=${result}`);
-      return result;
-    }
-  } catch (e) {
-    console.error('Error matching rule:', rulePattern, 'against URL:', url, e);
-    return false;
-  }
-}
-
-// Helper function to match domains with wildcard support
-function matchesDomainPattern(domain, pattern) {
-  if (pattern === '*' || pattern === '*.*') return true; // valid global patterns
-
-  // Normalize both domain and pattern by removing www.
-  const normalizedDomain = domain.replace(/^www\./, '');
-  const normalizedPattern = pattern.replace(/^www\./, '');
-  // No wildcards - exact match
-  if (!normalizedPattern.includes('*')) {
-    const result = normalizedDomain === normalizedPattern;
-    if (result === true) {
-      logDebug(`Testing domain pattern: domain=${domain}, pattern=${pattern}`);
-      logDebug(`Exact match test: ${normalizedDomain} === ${normalizedPattern} = ${result}`);
-    }
-    return result;
-  }
-  // Handle wildcard patterns
-  // For patterns like "google.*", match domains that contain "google."
-  // For patterns like "*.google.com", match subdomains of "google.com"
-  let regexPattern;
-  if (normalizedPattern.startsWith('*.')) {
-    // Subdomain pattern like "*.google.com" - matches subdomains
-    const baseDomain = normalizedPattern.substring(2); // Remove "*."
-    regexPattern = `^(${baseDomain.replace(/[.+?^${}()|[\]\\]/g, '\\$&')}|.*\\.${baseDomain.replace(/[.+?^${}()|[\]\\]/g, '\\$&')})$`;
-    //logDebug(`Subdomain regex: ${regexPattern}`);
-  } else if (normalizedPattern.endsWith('.*')) {
-    // Domain family pattern like "google.*" - matches google.<tld> but not subdomains
-    const baseDomain = normalizedPattern.substring(0, normalizedPattern.length - 2); // Remove ".*"
-    regexPattern = `^${baseDomain.replace(/[.+?^${}()|[\]\\]/g, '\\$&')}\\.[a-zA-Z]{2,}$`;
-    //logDebug(`Domain family regex: ${regexPattern}`);
-  } else {
-    // General wildcard pattern - convert * to .*
-    regexPattern = normalizedPattern
-      .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // Escape regex special chars
-      .replace(/\\\*/g, '.*'); // Convert escaped * back to .*
-    regexPattern = '^' + regexPattern + '$';
-    logDebug(`General wildcard regex: ${regexPattern}`);
-  }
-  try {
-    const regex = new RegExp(regexPattern, 'i'); // Case-insensitive
-    const result = regex.test(normalizedDomain);
-    //logDebug(`Domain pattern test: "${normalizedDomain}" against "${normalizedPattern}" (regex: ${regexPattern}) = ${result}`);
-    return result;
-  } catch (e) {
-    console.error('Invalid wildcard pattern:', normalizedPattern, e);
-    return false;
-  }
-}
-
-// Function to create a new temporary container
-async function createTempContainer() {
-  const num = await getNextContainerNumber();
-  const name = `tmp_${num}`;
-  logDebug('Creating temp container:', name);
-
-  // Load default style
-  const { tempContainerStyle = { color: 'blue', icon: 'circle', randomColor: false, randomIcon: false } } =
-    await browser.storage.local.get('tempContainerStyle');
-
-  const color = tempContainerStyle.randomColor ? getRandomItem(COLORS) : tempContainerStyle.color || 'blue';
-  const icon = tempContainerStyle.randomIcon ? getRandomItem(ICONS) : tempContainerStyle.icon || 'circle';
-
-  const container = await browser.contextualIdentities.create({
-    name: name,
-    color: color,
-    icon: icon,
-  });
-
-  logDebug(`Created temp container: ${name} with color=${color}, icon=${icon}`);
-  startDeletionTimer(container.cookieStoreId);
-  return container;
-}
-
-// Function to start a deletion timer for a container
-function startDeletionTimer(cookieStoreId) {
-  if (deletionTimers.has(cookieStoreId)) {
-    clearTimeout(deletionTimers.get(cookieStoreId));
-  }
-  const timerId = setTimeout(
-    async () => {
-      const tabs = await browser.tabs.query({ cookieStoreId });
-      if (tabs.length === 0) {
-        await browser.contextualIdentities.remove(cookieStoreId);
-        logDebug('Deleted container:', cookieStoreId);
-      }
-      deletionTimers.delete(cookieStoreId);
-    },
-    5 * 60 * 1000,
-  ); // 5 minutes
-  deletionTimers.set(cookieStoreId, timerId);
-}
-
-// Function to cancel a deletion timer
-function cancelDeletionTimer(cookieStoreId) {
-  if (deletionTimers.has(cookieStoreId)) {
-    clearTimeout(deletionTimers.get(cookieStoreId));
-    deletionTimers.delete(cookieStoreId);
-  }
-}
-
-// Replace a tab with a new one in a temporary or permanent container
-// targetCookieStoreId: optional pre-resolved container ID; skips getContainerForDomain if provided
-async function replaceTab(tab, newUrl = null, targetCookieStoreId = null) {
-  const originalTabId = tab.id;
-
-  // Resolve the target URL first so it can be validated
-  const targetUrl = newUrl || (tab.url && !['about:blank', 'about:newtab'].includes(tab.url) ? tab.url : null);
-
-  // Comprehensive Privileged/Invalid URL check.
-  // Check targetUrl here because that is what browser.tabs.create will eventually use.
-  if (
-    !targetUrl ||
-    targetUrl.startsWith('about:') ||
-    targetUrl.startsWith('chrome:') ||
-    targetUrl.startsWith('resource:')
-  ) {
-    logDebug(`Skipping replaceTab for blank or privileged URL: ${targetUrl || 'No URL'}`);
-    // Clean up the lock on early return
-    processingTabs.delete(originalTabId);
-    return tab;
-  }
-
-  const originalIndex = tab.index;
-  const windowId = tab.windowId;
-
-  // Logging setup (for debugging)
-  const container = tab.cookieStoreId
-    ? await browser.contextualIdentities.get(tab.cookieStoreId).catch(() => null)
-    : null;
-  const containerName = container ? container.name : tab.cookieStoreId === 'firefox-default' ? 'Default' : 'unknown';
-  const isTempContainer = container && /^tmp_\d+$/.test(container.name);
-  logDebug(
-    `replaceTab: Tab ${originalTabId}, URL: ${targetUrl}, container: ${containerName} (${tab.cookieStoreId}), isTemp: ${isTempContainer}`,
-  );
-
-  // Resolve the CookieStoreId
-  let cookieStoreId = targetCookieStoreId;
-
-  if (!cookieStoreId) {
-    const domain = getDomain(targetUrl);
-    if (domain) {
-      cookieStoreId = await getContainerForDomain(targetUrl);
-    }
-  }
-
-  if (!cookieStoreId) {
-    logDebug(`No rule found for ${targetUrl}. Creating temporary isolation container.`);
-    const tempContainer = await createTempContainer();
-    cookieStoreId = tempContainer.cookieStoreId;
-  }
-
-  try {
-    const newTab = await browser.tabs.create({
-      url: targetUrl,
-      cookieStoreId: cookieStoreId,
-      index: originalIndex,
-      windowId: windowId,
-      active: tab.active,
-    });
-
-    addonCreatedTabs.add(newTab.id);
-    logDebug(`Created new tab at index: ${originalIndex}, new tab id: ${newTab.id}, container: ${cookieStoreId}`);
-
-    // Remove original tab
-    try {
-      await browser.tabs.get(originalTabId);
-      await browser.tabs.remove(originalTabId);
-      logDebug(`Removed original tab: ${originalTabId}`);
-    } catch (error) {
-      console.warn(`Original tab ${originalTabId} no longer exists, skipping removal`);
-    }
-
-    if (targetUrl) {
-      tabUrls.set(newTab.id, targetUrl);
-    }
-    return newTab;
-  } catch (error) {
-    console.error(`Error in replaceTab for tab ${originalTabId}:`, error);
-    throw error;
-  } finally {
-    // Ensure the lock is always released
-    processingTabs.delete(originalTabId);
-  }
 }
 
 // Listen for storage changes
@@ -758,6 +450,12 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     await handleContainerChangeOnNavigation(tabId, changeInfo.url);
   }
 
+  // Trigger history update when a title change is detected
+  if (changeInfo.title) {
+    logDebug(`[History] Title updated for tab ${tabId}: ${changeInfo.title}`);
+    await synchronizedUpdateHistory(tabId, tab.url);
+  }
+
   if (processingTabs.has(tabId)) {
     logDebug(`Tab ${tabId} already being processed, skipping`);
     return;
@@ -794,6 +492,18 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && addonCreatedTabs.has(tabId)) {
     logDebug(`Removing tab ${tabId} from addonCreatedTabs after navigation complete`);
     addonCreatedTabs.delete(tabId);
+  }
+});
+
+browser.webNavigation.onCompleted.addListener(async (details) => {
+  if (details.frameId === 0) {
+    await synchronizedUpdateHistory(details.tabId, details.url);
+  }
+});
+
+browser.webNavigation.onHistoryStateUpdated.addListener(async (details) => {
+  if (details.frameId === 0) {
+    await synchronizedUpdateHistory(details.tabId, details.url);
   }
 });
 
@@ -868,6 +578,7 @@ browser.tabs.onRemoved.addListener(async (tabId) => {
   addonCreatedTabs.delete(tabId);
   tabProcessingCount.delete(tabId);
   trackerTabDomains.delete(tabId);
+  clearTabHistory(tabId);
 
   // // Clean up exclusion tracking for both permanent and temporary exclusions
   const wasPermanent = permanentExclusions.has(tabId);
@@ -1291,6 +1002,14 @@ browser.runtime.onMessage.addListener(async (message) => {
     contexts: ['page', 'link', 'selection'],
   });
 
+  // Create a permanent sub-menu for history
+  browser.contextMenus.create({
+    id: 'history-submenu',
+    parentId: 'auto-containers-main',
+    title: 'Tab History',
+    contexts: ['page', 'link', 'selection'],
+  });
+
   browser.contextMenus.create({
     id: 'exclude-from-isolation',
     parentId: 'auto-containers-main',
@@ -1321,6 +1040,59 @@ browser.runtime.onMessage.addListener(async (message) => {
   }
 })();
 
+// Rebuilds the context menu history list for the specific tab
+browser.contextMenus.onShown.addListener(async (info, tab) => {
+  logDebug(`[Menu] onShown fired for tab ${tab.id}`);
+
+  // Clear previous history items only
+  for (const id of historyMenuIds) {
+    try {
+      await browser.contextMenus.remove(id);
+    } catch (e) {}
+  }
+  historyMenuIds = [];
+
+  // Fetch history for the current tab
+  const history = await getTabHistory(tab.id);
+
+  // Create items dynamically
+  if (history.length === 0) {
+    const id = 'history-empty';
+    await browser.contextMenus.create({
+      id: id,
+      parentId: 'history-submenu', // Parented to the sub-menu
+      title: 'No history',
+      contexts: ['page', 'link', 'selection'],
+      enabled: false,
+    });
+    historyMenuIds.push(id);
+    return;
+  }
+
+  // Build the menu
+  // History is stored oldest -> newest. Reverse it to show newest -> oldest.
+  const reversedHistory = [...history].reverse();
+
+  for (let i = 0; i < reversedHistory.length; i++) {
+    const item = reversedHistory[i];
+    const id = `history-nav-${i}`;
+
+    // Labelling: Index 0 is the current page
+    const title = (i === 0 ? '[Current] ' : '') + (item.title || item.url).substring(0, 50);
+
+    await browser.contextMenus.create({
+      id: id,
+      parentId: 'history-submenu', // Parented to the sub-menu
+      title: title,
+      contexts: ['page', 'link', 'selection'],
+      enabled: i !== 0, // Disable the current page entry
+    });
+    historyMenuIds.push(id);
+  }
+  // Force the browser to refresh the visual menu state
+  await browser.contextMenus.refresh();
+});
+
 // Context menu click handler
 browser.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === 'exclude-from-isolation') {
@@ -1342,6 +1114,19 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
 
       await updateTabBadge(tab.id);
       logDebug(`Tab ${tab.id} removed from domain isolation exclusions`);
+    }
+  } else if (info.menuItemId.startsWith('history-nav-')) {
+    // Handle history navigation
+    const index = parseInt(info.menuItemId.replace('history-nav-', ''), 10);
+    const history = await getTabHistory(tab.id);
+
+    // Reverse it because the menu was rendered in reverse order
+    const reversedHistory = [...history].reverse();
+    const targetItem = reversedHistory[index];
+
+    if (targetItem && targetItem.url) {
+      logDebug(`[History] Navigating tab ${tab.id} back to: ${targetItem.url}`);
+      await browser.tabs.update(tab.id, { url: targetItem.url });
     }
   }
 });
