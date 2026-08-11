@@ -1,4 +1,5 @@
 import { sortRules } from './sorting.js';
+import { fetchFavicon } from './favicons.js';
 import { getTabHistory, setTabHistory, synchronizedUpdateHistory, clearTabHistory } from './tabHistory.js';
 import { getDomain, getContainerForDomain, checkOverrideRules } from './containerRules.js';
 import { createTempContainer, getTempContainers, startDeletionTimer, cancelDeletionTimer } from './tempContainers.js';
@@ -1073,6 +1074,9 @@ browser.contextMenus.onShown.addListener(async (info, tab) => {
   // History is stored oldest -> newest. Reverse it to show newest -> oldest.
   const reversedHistory = [...history].reverse();
 
+  // Fetch favicons concurrently for all history items
+  const favicons = await Promise.all(reversedHistory.map((item) => fetchFavicon(item.url)));
+
   for (let i = 0; i < reversedHistory.length; i++) {
     const item = reversedHistory[i];
     const id = `history-nav-${i}`;
@@ -1080,13 +1084,22 @@ browser.contextMenus.onShown.addListener(async (info, tab) => {
     // Labelling: Index 0 is the current page
     const title = (i === 0 ? '[Current] ' : '') + (item.title || item.url).substring(0, 50);
 
-    await browser.contextMenus.create({
+    const menuItemOptions = {
       id: id,
       parentId: 'history-submenu', // Parented to the sub-menu
       title: title,
       contexts: ['page', 'link', 'selection'],
       enabled: i !== 0, // Disable the current page entry
-    });
+    };
+
+    // Attach Base64 favicon if available
+    if (favicons[i]) {
+      menuItemOptions.icons = {
+        16: favicons[i],
+      };
+    }
+
+    await browser.contextMenus.create(menuItemOptions);
     historyMenuIds.push(id);
   }
   // Force the browser to refresh the visual menu state

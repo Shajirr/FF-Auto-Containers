@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Auto Containers",
-  "version": "2026.7.18",
+  "version": "2026.8.11",
   "description": "Automatically opens tabs in either temporary or permanent containers for domain isolation.",
 
   "browser_specific_settings": {
@@ -22,7 +22,10 @@
     "webNavigation",
     "activeTab",
     "contextMenus",
-    "sessions"
+    "sessions",
+    "https://icons.duckduckgo.com/*",
+    "https://www.google.com/s2/favicons*",
+    "https://*.gstatic.com/*"
   ],
 
   "background": {
