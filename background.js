@@ -29,6 +29,10 @@ let isRecordingHops = false;
 let saveVisitedFavicons = false;
 // Array to store history menu IDs
 let historyMenuIds = [];
+// Boolean to track if unmatched domains should open in the default (No Container) container
+let defaultToNoContainer = false;
+// Set to track tabs whose container was explicitly chosen by the user (not by this addon)
+const userChosenTabs = new Set();
 
 // Domain isolation exclusion tracking
 const excludedTabs = new Set(); // all excluded tabs (perm + temp)
@@ -183,9 +187,14 @@ async function replaceTab(tab, newUrl = null, targetCookieStoreId = null) {
   }
 
   if (!cookieStoreId) {
-    logDebug(`No rule found for ${targetUrl}. Creating temporary isolation container.`);
-    const tempContainer = await createTempContainer();
-    cookieStoreId = tempContainer.cookieStoreId;
+    if (defaultToNoContainer) {
+      logDebug(`No rule found for ${targetUrl}. Using the default (No Container) container.`);
+      cookieStoreId = 'firefox-default';
+    } else {
+      logDebug(`No rule found for ${targetUrl}. Creating temporary isolation container.`);
+      const tempContainer = await createTempContainer();
+      cookieStoreId = tempContainer.cookieStoreId;
+    }
   }
 
   try {
@@ -285,6 +294,10 @@ browser.storage.onChanged.addListener((changes, namespace) => {
       saveVisitedFavicons = changes.saveVisitedFavicons.newValue ?? false;
       logDebug('Auto Containers: Save visited favicons changed to:', saveVisitedFavicons);
     }
+    if (changes.defaultToNoContainer) {
+      defaultToNoContainer = changes.defaultToNoContainer.newValue ?? false;
+      logDebug('Auto Containers: No Container default changed to:', defaultToNoContainer);
+    }
   }
 });
 
@@ -312,6 +325,23 @@ browser.tabs.onCreated.addListener(async (tab) => {
   // Track cookieStoreId so it's available after the tab is removed
   if (tab.cookieStoreId) {
     tabCookieStoreIds.set(tab.id, tab.cookieStoreId);
+  }
+
+  // Track tabs whose container was explicitly chosen by the user.
+  // A tab counts as user-chosen when it opens in a non-temp container that this
+  // addon did not create, and it was not simply inherited from an opener tab in the
+  // same container (e.g. a regular link click). This preserves explicit choices like
+  // Firefox's "Open Link in New Container" against automatic container reassignment.
+  if (tab.cookieStoreId && tab.cookieStoreId !== 'firefox-default' && !addonCreatedTabs.has(tab.id)) {
+    let isInherited = false;
+    if (tab.openerTabId) {
+      const openerTab = await browser.tabs.get(tab.openerTabId).catch(() => null);
+      isInherited = !!openerTab && openerTab.cookieStoreId === tab.cookieStoreId;
+    }
+    if (!isInherited) {
+      userChosenTabs.add(tab.id);
+      logDebug(`Tab ${tab.id} opened in user-selected container: ${tab.cookieStoreId}`);
+    }
   }
 
   // If the opener tab is excluded from domain isolation, inherit that exclusion.
@@ -360,18 +390,17 @@ browser.tabs.onCreated.addListener(async (tab) => {
       return;
     }
 
-    // Check if this blank tab inherited a container that could cause contamination
-    // Move to new temp container if:
-    // 1. It's in a permanent container (domain-specific container) - but not if it's being restored
-    // 2. It's in a temp container that already has other tabs with domains
+    // Check if this blank tab could cause contamination.
+    // Move it to a fresh temp container only if it's in a temp container that
+    // already has other tabs with domains.
+    // Blank tabs in permanent containers are left alone to respect user container choices.
     if (!isDefaultContainer) {
       let shouldMoveToNewContainer = false;
       let reason = '';
 
       if (!isTempContainer) {
-        // Blank tab in permanent container - move to prevent contamination
-        shouldMoveToNewContainer = true;
-        reason = `inherited permanent container ${tab.cookieStoreId}`;
+        // Blank tab in a permanent container - leave it in place
+        logDebug(`Blank tab ${tab.id} is in a permanent container, leaving as-is`);
       } else {
         // Blank tab in temp container - check if container has other tabs with domains
         const containerTabs = await browser.tabs.query({ cookieStoreId: tab.cookieStoreId });
@@ -506,6 +535,12 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     logDebug(`Removing tab ${tabId} from addonCreatedTabs after navigation complete`);
     addonCreatedTabs.delete(tabId);
   }
+  // Clear the user-chosen container mark once the initial load completes,
+  // so subsequent navigations follow rules again.
+  if (changeInfo.status === 'complete' && userChosenTabs.has(tabId)) {
+    logDebug(`Removing tab ${tabId} from userChosenTabs after navigation complete`);
+    userChosenTabs.delete(tabId);
+  }
 });
 
 browser.webNavigation.onCompleted.addListener(async (details) => {
@@ -591,6 +626,7 @@ browser.tabs.onRemoved.addListener(async (tabId) => {
   addonCreatedTabs.delete(tabId);
   tabProcessingCount.delete(tabId);
   trackerTabDomains.delete(tabId);
+  userChosenTabs.delete(tabId);
   clearTabHistory(tabId);
 
   // // Clean up exclusion tracking for both permanent and temporary exclusions
@@ -698,6 +734,17 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
       return;
     }
 
+    // Respect explicit user container choices: if the tab was placed in a permanent
+    // container by the user and a rule (including #Default) targets a different
+    // container, keep the user's choice.
+    if (userChosenTabs.has(tabId) && targetContainerId && targetContainerId !== tab.cookieStoreId) {
+      logDebug(
+        `Tab ${tabId} was placed in container ${tab.cookieStoreId} by the user; ignoring rule target ${targetContainerId}.`,
+      );
+      tabUrls.set(tabId, newUrl);
+      return;
+    }
+
     // Check opener for same-domain navigation.
     // Skip if a permanent container rule exists and the opener isn't in it — the rule takes precedence.
     if (tab.openerTabId) {
@@ -710,7 +757,8 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
           newDomain === openerDomain &&
           openerContainerId &&
           openerContainerId !== 'firefox-default' &&
-          !openerConflictsWithRule
+          !openerConflictsWithRule &&
+          !userChosenTabs.has(tabId)
         ) {
           if (tab.cookieStoreId !== openerContainerId) {
             logDebug(
@@ -737,6 +785,7 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
 
     const isCurrentlyDefault = tab.cookieStoreId === 'firefox-default';
     const isTargetDefault = !targetContainerId || targetContainerId === 'firefox-default';
+    const isPermanentContainer = !isTempContainer && !isCurrentlyDefault;
 
     // If the tab is already in the container specified by the rules (or default),
     // don't replace it, even if currentDomain is unknown (session restore).
@@ -753,9 +802,13 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
         shouldReplace = true;
         reason = `moving from default container to specific container: ${targetContainerId}`;
       } else if (!targetContainerId && newDomain) {
-        // Case 2: No rule found, and navigating to a valid domain -> isolate in a new temporary container
-        shouldReplace = true;
-        reason = `moving from default container to temp container (no rule matched)`;
+        // Case 2: No rule found, and navigating to a valid domain
+        if (defaultToNoContainer) {
+          logDebug(`No rule matched for ${newDomain} and No Container default is on; staying in default container.`);
+        } else {
+          shouldReplace = true;
+          reason = `moving from default container to temp container (no rule matched)`;
+        }
       }
       // If isTargetDefault is true, do nothing (stay in default)
     } else {
@@ -778,12 +831,24 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
           const currentTargetContainerId = await getContainerForDomain(currentUrl);
           // Only replace if the target containers are actually different
           if (targetContainerId !== currentTargetContainerId) {
-            shouldReplace = true;
-            reason = `domain change requiring different container: ${currentTargetContainerId} -> ${targetContainerId}`;
+            if (isPermanentContainer && !targetContainerId) {
+              logDebug(`Tab ${tabId} is in a permanent container and ${newDomain} has no rule; leaving as-is.`);
+            } else {
+              shouldReplace = true;
+              reason = `domain change requiring different container: ${currentTargetContainerId} -> ${targetContainerId}`;
+            }
           } else if (!targetContainerId && !currentTargetContainerId) {
-            // Both domains are "unassigned", but they are different -> new temp container
-            shouldReplace = true;
-            reason = `domain change requiring new temp container isolation`;
+            // Both domains are "unassigned", but they are different
+            if (isPermanentContainer) {
+              logDebug(`Tab ${tabId} is in a permanent container; leaving as-is for unmatched navigation.`);
+            } else if (defaultToNoContainer) {
+              targetContainerId = 'firefox-default';
+              shouldReplace = true;
+              reason = `domain change to unmatched domain with No Container default on`;
+            } else {
+              shouldReplace = true;
+              reason = `domain change requiring new temp container isolation`;
+            }
           }
         }
       } else if (targetContainerId && tab.cookieStoreId !== targetContainerId) {
@@ -873,6 +938,14 @@ async function handleNewTab(tab) {
         return;
       }
 
+      // Respect explicit user container choices
+      if (userChosenTabs.has(tab.id) && targetContainerId && targetContainerId !== tab.cookieStoreId) {
+        logDebug(
+          `New tab ${tab.id} was placed in container ${tab.cookieStoreId} by the user; ignoring rule target ${targetContainerId}.`,
+        );
+        return;
+      }
+
       if (targetContainerId && tab.cookieStoreId !== targetContainerId) {
         logDebug(`Replacing tab ${tab.id} with permanent container: ${targetContainerId}`);
         await replaceTab(tab, tab.url);
@@ -891,7 +964,12 @@ async function handleNewTab(tab) {
         : null;
       logDebug(`Opener domain: ${openerDomain}, New domain: ${newDomain}, Opener container: ${openerContainerId}`);
       // Reuse opener's container if domains match and opener is not in default container
-      if (openerDomain === newDomain && openerContainerId && openerContainerId !== 'firefox-default') {
+      if (
+        openerDomain === newDomain &&
+        openerContainerId &&
+        openerContainerId !== 'firefox-default' &&
+        !userChosenTabs.has(tab.id)
+      ) {
         if (tab.cookieStoreId !== openerContainerId) {
           logDebug(`Replacing tab ${tab.id} with opener's container: ${openerContainerId}`);
           await replaceTab(tab, tab.url);
@@ -905,8 +983,21 @@ async function handleNewTab(tab) {
         return;
       }
     }
-    // If no permanent container or opener match, assign a new temporary container
-    if (!isTempContainer || (openerTab && getDomain(tab.url) !== getDomain(openerTab.url))) {
+    // Fallback for unmatched domains
+    // Tabs in permanent containers are never auto-moved (they may reflect an explicit
+    // user choice or a link inherited from a permanent-container tab).
+    const isDefaultTab = !tab.cookieStoreId || tab.cookieStoreId === 'firefox-default';
+    const isPermanentContainerTab = !isTempContainer && !isDefaultTab;
+    if (isPermanentContainerTab) {
+      logDebug(`Tab ${tab.id} is in a permanent container; leaving as-is.`);
+    } else if (defaultToNoContainer) {
+      if (isDefaultTab) {
+        logDebug(`No rule matched for ${tab.url} and No Container default is on; already in default container.`);
+      } else {
+        logDebug(`No rule matched for ${tab.url}; moving to the default (No Container) container.`);
+        await replaceTab(tab, tab.url, 'firefox-default');
+      }
+    } else if (!isTempContainer || (openerTab && getDomain(tab.url) !== getDomain(openerTab.url))) {
       logDebug(`Replacing tab ${tab.id} with temporary container`);
       await replaceTab(tab, tab.url);
     } else {
@@ -1006,13 +1097,16 @@ browser.runtime.onMessage.addListener(async (message) => {
     DEBUG: false,
     isRecordingHops: false,
     saveVisitedFavicons: false,
+    defaultToNoContainer: false,
   });
   DEBUG = result.DEBUG;
   isRecordingHops = result.isRecordingHops;
   saveVisitedFavicons = result.saveVisitedFavicons;
+  defaultToNoContainer = result.defaultToNoContainer;
   logDebug('Auto Containers: Debug mode set to:', DEBUG);
   logDebug('Auto Containers: Hop tracking set to:', isRecordingHops);
   logDebug('Auto Containers: Save visited favicons set to:', saveVisitedFavicons);
+  logDebug('Auto Containers: No Container default set to:', defaultToNoContainer);
 
   // Create main context menu with submenu
   browser.contextMenus.create({
