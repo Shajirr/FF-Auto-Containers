@@ -1,11 +1,43 @@
 let DEBUG = false;
-const debugPrefix = '[AC]';
+const debugPrefix = '[AC][Favicons]';
 
 function logDebug(...args) {
   if (DEBUG) console.log(debugPrefix, ...args);
 }
 
-// Helper to convert Blob to Base64
+// In-memory set to track which domains are cached without pulling the full storage object
+let cachedDomains = null;
+// Promise to ensure only one initialization of cachedDomains occurs at a time
+let initDomainsPromise = null;
+
+// Lazily initializes the in-memory cachedDomains set from storage
+async function initCachedDomains() {
+  if (cachedDomains) return;
+
+  if (!initDomainsPromise) {
+    initDomainsPromise = (async () => {
+      const { faviconCache = {} } = await browser.storage.local.get('faviconCache');
+      cachedDomains = new Set(Object.keys(faviconCache));
+      logDebug(`[Favicon] In-memory domain index initialized with ${cachedDomains.size} items.`);
+    })().finally(() => {
+      initDomainsPromise = null;
+    });
+  }
+  await initDomainsPromise;
+}
+
+// Helper to extract clean domain/hostname from a URL or domain string
+export function extractDomain(urlString) {
+  if (!urlString) return null;
+  try {
+    const u = urlString.startsWith('http') ? new URL(urlString) : new URL(`https://${urlString}`);
+    return u.hostname;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Helper to convert Blob to Base64 Data URI
 const blobToBase64 = (blob) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -15,13 +47,9 @@ const blobToBase64 = (blob) => {
   });
 };
 
-// Track active/pending network fetches to prevent duplicate requests for the same domain
-const pendingRequests = new Map();
-
 // Purges the bottom 2/3 of least-used favicons from storage when quota is reached.
 async function purgeLeastUsedIcons() {
   try {
-    // Only fetch the favicon cache object, not all storage
     const { faviconCache = {} } = await browser.storage.local.get('faviconCache');
     const entries = Object.entries(faviconCache);
 
@@ -38,143 +66,205 @@ async function purgeLeastUsedIcons() {
     const newCache = Object.fromEntries(entriesToKeep);
 
     await browser.storage.local.set({ faviconCache: newCache });
-    logDebug(`[Favicon] Purged ${deleteCount} least-used favicons. Retained ${entriesToKeep.length}.`);
+
+    // Update the in-memory cachedDomains set to reflect the new cache state
+    if (cachedDomains) {
+      cachedDomains = new Set(Object.keys(newCache));
+    }
+
+    logDebug(`Purged ${deleteCount} least-used favicons. Retained ${entriesToKeep.length}.`);
   } catch (error) {
-    console.error('[Favicon] Failed to execute cache purge:', error);
+    console.error('[Favicons] Failed to execute cache purge:', error);
   }
+}
+
+// Lock to prevent concurrent topSites queries during Promise.all sweeps
+let topSitesFetchPromise = null;
+
+// Helper to fetch Top Sites, respect the cooldown, and populate the cache
+async function fetchTopSitesFavicons(currentCache) {
+  const { lastTopSitesFetch = 0 } = await browser.storage.local.get('lastTopSitesFetch');
+  const now = Date.now();
+  const TWO_HOURS = 2 * 60 * 60 * 1000;
+
+  if (now - lastTopSitesFetch <= TWO_HOURS) {
+    return currentCache; // Cooldown is active, return existing cache unmodified
+  }
+
+  logDebug('Fetching topSites to populate missing cache...');
+
+  try {
+    const topSites = await browser.topSites.get({ includeFavicon: true });
+    let updated = false;
+
+    topSites.forEach((site) => {
+      if (!site.url || !site.favicon) return;
+      const siteDomain = extractDomain(site.url);
+
+      // Only add to cache if it doesn't already exist
+      if (siteDomain && !currentCache[siteDomain]) {
+        currentCache[siteDomain] = { data: site.favicon, count: 1 };
+        if (cachedDomains) cachedDomains.add(siteDomain); // Update in-memory set
+        updated = true;
+      }
+    });
+
+    // Save the new timestamp, and the cache if it was updated
+    await browser.storage.local.set({
+      lastTopSitesFetch: now,
+      ...(updated ? { faviconCache: currentCache } : {}),
+    });
+  } catch (err) {
+    console.error('[Favicons] Failed to fetch topSites:', err);
+  }
+
+  return currentCache;
 }
 
 /**
- * Fetches, caches, and returns a Base64 Data URI favicon for a given URL.
- * @param {string} urlString - Full URL to retrieve favicon for.
- * @returns {Promise<string|null>} Base64 Data URI or null if unavailable.
+ * Retrieves a Base64 Data URI favicon for a given URL or domain.
+ * Checks local cache first. If missing, attempts a Top Sites retrieval.
+ * @param {string} urlOrDomain - Full URL or domain string.
+ * @returns {Promise<string|null>} Base64 Data URI or null if unavailable locally.
  */
-export async function fetchFavicon(urlString) {
-  if (!urlString) return null;
+export async function fetchFavicon(urlOrDomain) {
+  const domain = extractDomain(urlOrDomain);
+  if (!domain) return null;
 
-  let hostname;
+  // Ensure the in-memory set is ready
+  if (!cachedDomains) {
+    await initCachedDomains();
+  }
+
+  logDebug(`Fetching favicon for domain: ${domain}`);
+
   try {
-    hostname = urlString.startsWith('http') ? new URL(urlString).hostname : urlString;
-  } catch (e) {
-    console.error(`[Favicon] Invalid URL provided: ${urlString}`);
-    return null;
-  }
+    // Check local cache
+    if (cachedDomains.has(domain)) {
+      // If the domain is in the in-memory set, fetch the actual data from storage
+      const { faviconCache = {} } = await browser.storage.local.get('faviconCache');
+      const cachedItem = faviconCache[domain];
 
-  // If an active fetch/lookup for this hostname is already in progress, await it
-  if (pendingRequests.has(hostname)) {
-    return await pendingRequests.get(hostname);
-  }
+      if (cachedItem) {
+        logDebug(`Favicon found in local cache for domain: ${domain}`);
+        const data = typeof cachedItem === 'string' ? cachedItem : cachedItem.data;
 
-  // Define the execution task and register it immediately in pendingRequests
-  const taskPromise = (async () => {
-    // Fetch the favicon cache dictionary from storage
-    const { faviconCache = {} } = await browser.storage.local.get('faviconCache');
-
-    // Check local storage cache
-    if (faviconCache[hostname]) {
-      const cachedItem = faviconCache[hostname];
-      cachedItem.count = (cachedItem.count || 0) + 1;
-
-      // Update retrieval count
-      browser.storage.local.set({ faviconCache }).catch((e) => {
-        console.error('[Favicon] Failed to update usage count:', e);
-      });
-
-      return cachedItem.data;
-    }
-
-    // Check session cooldowns
-    const globalCooldownKey = `favicon_cooldown_${hostname}`;
-    const ddgKey = `favicon_ddg_fail_${hostname}`;
-    const now = Date.now();
-
-    const cooldownData = sessionStorage.getItem(globalCooldownKey);
-    if (cooldownData && now < parseInt(cooldownData, 10)) {
-      return null;
-    }
-
-    const ddgUrl = `https://icons.duckduckgo.com/ip3/${hostname}.ico`;
-    const googleUrl = `https://www.google.com/s2/favicons?domain=${hostname}&sz=32`;
-    let iconBlob = null;
-
-    // Try DuckDuckGo first
-    if (!sessionStorage.getItem(ddgKey)) {
-      try {
-        const response = await fetch(ddgUrl);
-        if (response.ok) {
-          iconBlob = await response.blob();
-        } else if (response.status === 404) {
-          sessionStorage.setItem(ddgKey, 'true');
+        // Update count asynchronously
+        if (typeof cachedItem === 'object') {
+          cachedItem.count = (cachedItem.count || 0) + 1;
+          browser.storage.local.set({ faviconCache }).catch(() => {});
         }
-      } catch (error) {
-        logDebug(`[Favicon] DuckDuckGo fetch failed for ${hostname}`);
-      }
-    }
-
-    // Try Google fallback
-    if (!iconBlob) {
-      try {
-        const response = await fetch(googleUrl);
-        if (response.ok) {
-          iconBlob = await response.blob();
-        }
-      } catch (error) {
-        logDebug(`[Favicon] Google fetch failed for ${hostname}`);
-      }
-    }
-
-    // Process & cache result
-    if (iconBlob) {
-      try {
-        const base64Icon = await blobToBase64(iconBlob);
-
-        // Fetch latest cache state before writing
-        const { faviconCache: latestCache = {} } = await browser.storage.local.get('faviconCache');
-        latestCache[hostname] = {
-          data: base64Icon,
-          count: 1,
-        };
-
-        try {
-          await browser.storage.local.set({ faviconCache: latestCache });
-        } catch (quotaError) {
-          // Catch Firefox storage quota errors specifically
-          if (
-            quotaError.name === 'QuotaExceededError' ||
-            (quotaError.message &&
-              (quotaError.message.includes('QuotaExceededError') || quotaError.message.includes('quota')))
-          ) {
-            logDebug('[Favicon] Storage quota exceeded. Purging 2/3 least-used favicons...');
-            await purgeLeastUsedIcons();
-
-            // Retry save after purge
-            const { faviconCache: updatedCache = {} } = await browser.storage.local.get('faviconCache');
-            updatedCache[hostname] = { data: base64Icon, count: 1 };
-            await browser.storage.local.set({ faviconCache: updatedCache }).catch((e) => {
-              console.error('[Favicon] Still out of storage after purge:', e);
-            });
-          }
-        }
-
-        return base64Icon;
-      } catch (e) {
-        console.error('[Favicon] Failed to process image blob:', e);
-        return null;
+        return data || null;
       }
     } else {
-      // Set 15-minute cooldown if both services failed
-      sessionStorage.setItem(globalCooldownKey, (now + 15 * 60 * 1000).toString());
-      return null;
+      logDebug(`Favicon not found in local cache for domain: ${domain}`);
     }
-  })();
 
-  // Register promise in in-flight map
-  pendingRequests.set(hostname, taskPromise);
+    // Missing from cache -> check Top Sites
+    // Use a lock to ensure multiple concurrent missing domains don't spam the API
+    if (!topSitesFetchPromise) {
+      topSitesFetchPromise = (async () => {
+        const { faviconCache = {} } = await browser.storage.local.get('faviconCache');
+        return await fetchTopSitesFavicons(faviconCache);
+      })().finally(() => {
+        topSitesFetchPromise = null;
+      });
+    }
+
+    const updatedCache = await topSitesFetchPromise;
+
+    // Check if the Top Sites fetch found the missing domain
+    if (updatedCache[domain]) {
+      logDebug(`Favicon found in Top Sites cache for domain: ${domain}`);
+      const cachedItem = updatedCache[domain];
+      return typeof cachedItem === 'string' ? cachedItem : cachedItem.data;
+    }
+  } catch (e) {
+    console.error('[Favicons] Failed to fetch favicon:', e);
+  }
+
+  return null;
+}
+
+/**
+ * Caches favicon on active tab update if setting is enabled.
+ * Fetches from the first-party site directly.
+ * @param {string} tabUrl - The URL of the active tab.
+ * @param {string} favIconUrl - The favicon URL provided by the tab.
+ */
+export async function recordFaviconFromTab(tabUrl, favIconUrl) {
+  if (!tabUrl || !favIconUrl) return;
+
+  // Only process standard web pages
+  if (!tabUrl.startsWith('http')) {
+    return;
+  }
+
+  const domain = extractDomain(tabUrl);
+  // Do not record internal or extension favicons, or if the domain is invalid
+  if (
+    !domain ||
+    favIconUrl.startsWith('chrome:') ||
+    favIconUrl.startsWith('about:') ||
+    favIconUrl.startsWith('resource:') ||
+    favIconUrl.startsWith('moz-extension:')
+  ) {
+    logDebug(`Skipping favicon recording for domain: ${domain}, favicon URL: ${favIconUrl.substring(0, 80)}...`);
+    return;
+  }
+
+  // Ensure the in-memory set is ready
+  if (!cachedDomains) {
+    await initCachedDomains();
+  }
+
+  // Instant in-memory check without touching browser.storage
+  if (cachedDomains.has(domain)) {
+    // Already cached
+    logDebug(`Favicon already cached for domain: ${domain}`);
+    return;
+  }
+
+  logDebug(`Recording favicon for tab URL: ${tabUrl}, favicon URL: ${favIconUrl.substring(0, 80)}...`);
 
   try {
-    return await taskPromise;
-  } finally {
-    // Always clean up after completion/rejection
-    pendingRequests.delete(hostname);
+    let base64Data;
+
+    // If the site provided the icon as a Base64 string directly, just use it
+    if (favIconUrl.startsWith('data:')) {
+      base64Data = favIconUrl;
+    } else {
+      // Otherwise, fetch the image file and convert it to Base64
+      const response = await fetch(favIconUrl);
+      if (!response.ok) {
+        logDebug(`Failed to fetch favicon from URL: ${favIconUrl.substring(0, 80)}..., status: ${response.status}`);
+        return;
+      }
+
+      const blob = await response.blob();
+      base64Data = await blobToBase64(blob);
+    }
+
+    const { faviconCache = {} } = await browser.storage.local.get('faviconCache');
+    faviconCache[domain] = { data: base64Data, count: 1 };
+
+    try {
+      await browser.storage.local.set({ faviconCache });
+      cachedDomains.add(domain);
+      logDebug(`Recorded favicon locally for domain: ${domain}`);
+    } catch (quotaError) {
+      // Catch Firefox storage quota errors specifically
+      logDebug('Storage quota exceeded. Purging 2/3 of the least-used favicons...');
+      await purgeLeastUsedIcons();
+
+      const { faviconCache: freshCache = {} } = await browser.storage.local.get('faviconCache');
+      freshCache[domain] = { data: base64Data, count: 1 };
+      await browser.storage.local.set({ faviconCache: freshCache });
+      cachedDomains.add(domain);
+    }
+  } catch (err) {
+    // Suppress network errors for normal browsing
   }
 }
+
+initCachedDomains();

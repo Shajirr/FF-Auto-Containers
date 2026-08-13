@@ -1,7 +1,7 @@
 export { synchronizedUpdateHistory, getTabHistory, clearTabHistory, setTabHistory };
 
 let DEBUG = false;
-const debugPrefix = '[AC]';
+const debugPrefix = '[AC][History]';
 
 function logDebug(...args) {
   if (DEBUG) console.log(debugPrefix, ...args);
@@ -73,7 +73,7 @@ async function updateTabHistory(tabId, url) {
   // Skip invalid / internal / extension URLs
   if (!url || url.startsWith('about:') || url.startsWith('moz-extension://')) return;
 
-  logDebug(`[History] Updating history for tab ${tabId} with URL: ${url}`);
+  logDebug(`Updating history for tab ${tabId} with URL: ${url}`);
 
   // Get tab data
   const history = await getTabHistory(tabId);

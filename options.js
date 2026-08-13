@@ -1,7 +1,8 @@
-let DEBUG = false; // default fallback
+let DEBUG = false;
+const debugPrefix = '[AC]';
 
 function logDebug(...args) {
-  if (DEBUG) console.log(...args);
+  if (DEBUG) console.log(debugPrefix, ...args);
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -14,6 +15,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const overrideRulesEl = document.getElementById('overrideRules');
   const showNotifications = document.getElementById('showNotifications');
   const debugLogging = document.getElementById('debugLogging');
+  const saveVisitedFaviconsCheckbox = document.getElementById('saveVisitedFavicons');
   const saveButton = document.getElementById('saveButton');
   const saveMessage = document.getElementById('save-message');
 
@@ -30,7 +32,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   const randomIconCheckbox = document.getElementById('randomIcon');
 
   // Check if DOM elements exist
-  if (!containerRules || !overrideRulesEl || !showNotifications || !debugLogging || !saveButton || !saveMessage) {
+  if (
+    !containerRules ||
+    !overrideRulesEl ||
+    !showNotifications ||
+    !debugLogging ||
+    !saveVisitedFaviconsCheckbox ||
+    !saveButton ||
+    !saveMessage
+  ) {
     console.error('One or more DOM elements not found');
     saveMessage.textContent = 'Error: Options page elements not found';
     saveMessage.classList.add('error', 'visible');
@@ -55,7 +65,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     overrideRules = '',
     notifications = true,
     isRecordingHops = false,
-  } = await browser.storage.local.get(['rules', 'overrideRules', 'notifications', 'isRecordingHops']);
+    saveVisitedFavicons = false,
+  } = await browser.storage.local.get([
+    'rules',
+    'overrideRules',
+    'notifications',
+    'isRecordingHops',
+    'saveVisitedFavicons',
+  ]);
 
   // Load default temp container style
   const { tempContainerStyle = { color: 'blue', icon: 'circle', randomColor: false, randomIcon: false } } =
@@ -175,6 +192,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   overrideRulesEl.value = overrideRules;
   showNotifications.checked = notifications;
   debugLogging.checked = DEBUG;
+  saveVisitedFaviconsCheckbox.checked = saveVisitedFavicons;
 
   // Listen for storage changes to update the UI
   browser.storage.onChanged.addListener(async (changes, namespace) => {
@@ -190,6 +208,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (changes.overrideRules) {
         logDebug('Override rules changed externally, updating display');
         overrideRulesEl.value = changes.overrideRules.newValue || '';
+      }
+      if (changes.saveVisitedFavicons) {
+        saveVisitedFaviconsCheckbox.checked = changes.saveVisitedFavicons.newValue ?? false;
       }
     }
   });
@@ -358,6 +379,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         overrideRules: overrideRulesText,
         notifications: showNotifications.checked,
         DEBUG: debugLogging.checked,
+        saveVisitedFavicons: saveVisitedFaviconsCheckbox.checked,
         tempContainerStyle: {
           color: randomColorCheckbox.checked ? null : selectedColor,
           icon: randomIconCheckbox.checked ? null : selectedIcon,

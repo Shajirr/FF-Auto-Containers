@@ -1,5 +1,5 @@
 import { sortRules } from './sorting.js';
-import { fetchFavicon } from './favicons.js';
+import { fetchFavicon, recordFaviconFromTab } from './favicons.js';
 import { getTabHistory, setTabHistory, synchronizedUpdateHistory, clearTabHistory } from './tabHistory.js';
 import { getDomain, getContainerForDomain, checkOverrideRules } from './containerRules.js';
 import { createTempContainer, getTempContainers, startDeletionTimer, cancelDeletionTimer } from './tempContainers.js';
@@ -25,6 +25,8 @@ const addonCreatedTabs = new Set();
 const trackerTabDomains = new Map();
 // Boolean to track if domain hop tracking is active
 let isRecordingHops = false;
+// Boolean to track if favicons should be saved for visited domains
+let saveVisitedFavicons = false;
 // Array to store history menu IDs
 let historyMenuIds = [];
 
@@ -279,6 +281,10 @@ browser.storage.onChanged.addListener((changes, namespace) => {
       isRecordingHops = changes.isRecordingHops.newValue ?? false;
       logDebug('Auto Containers: Hop tracking changed to:', isRecordingHops);
     }
+    if (changes.saveVisitedFavicons) {
+      saveVisitedFavicons = changes.saveVisitedFavicons.newValue ?? false;
+      logDebug('Auto Containers: Save visited favicons changed to:', saveVisitedFavicons);
+    }
   }
 });
 
@@ -426,6 +432,12 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (tab.cookieStoreId) {
     tabCookieStoreIds.set(tabId, tab.cookieStoreId);
   }
+
+  // Record favicons for visited domains if enabled
+  if (saveVisitedFavicons && changeInfo.favIconUrl && (tab.url || changeInfo.url)) {
+    recordFaviconFromTab(tab.url || changeInfo.url, changeInfo.favIconUrl).catch(() => {});
+  }
+
   const filteredChangeInfo = { ...changeInfo };
   delete filteredChangeInfo.favIconUrl;
   logDebug(
@@ -990,11 +1002,17 @@ browser.runtime.onMessage.addListener(async (message) => {
 (async () => {
   logDebug('Auto Containers background script loaded');
 
-  const result = await browser.storage.local.get({ DEBUG: false, isRecordingHops: false });
+  const result = await browser.storage.local.get({
+    DEBUG: false,
+    isRecordingHops: false,
+    saveVisitedFavicons: false,
+  });
   DEBUG = result.DEBUG;
   isRecordingHops = result.isRecordingHops;
+  saveVisitedFavicons = result.saveVisitedFavicons;
   logDebug('Auto Containers: Debug mode set to:', DEBUG);
   logDebug('Auto Containers: Hop tracking set to:', isRecordingHops);
+  logDebug('Auto Containers: Save visited favicons set to:', saveVisitedFavicons);
 
   // Create main context menu with submenu
   browser.contextMenus.create({
