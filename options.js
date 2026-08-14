@@ -18,6 +18,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const saveVisitedFaviconsCheckbox = document.getElementById('saveVisitedFavicons');
   const saveButton = document.getElementById('saveButton');
   const saveMessage = document.getElementById('save-message');
+  const totalContainersEl = document.getElementById('totalContainers');
+  const permanentContainersEl = document.getElementById('permanentContainers');
+  const temporaryContainersEl = document.getElementById('temporaryContainers');
 
   // Domain hop tracking elements
   const toggleTrackerBtn = document.getElementById('toggleTrackerBtn');
@@ -31,6 +34,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const randomColorCheckbox = document.getElementById('randomColor');
   const randomIconCheckbox = document.getElementById('randomIcon');
 
+  // Elements for favicon import
+  const folderUpload = document.getElementById('folderUpload');
+  const folderMessage = document.getElementById('folder-message');
+
   // Check if DOM elements exist
   if (
     !containerRules ||
@@ -39,7 +46,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     !debugLogging ||
     !saveVisitedFaviconsCheckbox ||
     !saveButton ||
-    !saveMessage
+    !saveMessage ||
+    !folderUpload ||
+    !folderMessage ||
+    !totalContainersEl ||
+    !permanentContainersEl ||
+    !temporaryContainersEl
   ) {
     console.error('One or more DOM elements not found');
     saveMessage.textContent = 'Error: Options page elements not found';
@@ -53,9 +65,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const tempCount = identities.filter((identity) => /^tmp_\d+$/.test(identity.name)).length;
     const totalCount = identities.length;
     const permCount = totalCount - tempCount;
-    document.getElementById('totalContainers').textContent = totalCount;
-    document.getElementById('permanentContainers').textContent = permCount;
-    document.getElementById('temporaryContainers').textContent = tempCount;
+    try {
+      if (totalContainersEl) totalContainersEl.textContent = String(totalCount);
+      if (permanentContainersEl) permanentContainersEl.textContent = String(permCount);
+      if (temporaryContainersEl) temporaryContainersEl.textContent = String(tempCount);
+    } catch (e) {
+      console.error('Failed to update container count elements', e);
+    }
   };
   await updateContainerCounts();
 
@@ -352,6 +368,111 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   closeModalBtn.addEventListener('click', () => hopLogModal.close());
+
+  // Helper to show Folder import status messages
+  function showFolderStatus(msg, isError) {
+    folderMessage.textContent = msg;
+    if (isError) {
+      folderMessage.classList.add('error');
+    } else {
+      folderMessage.classList.remove('error');
+    }
+    folderMessage.classList.add('visible');
+    setTimeout(() => {
+      folderMessage.classList.remove('visible', 'error');
+    }, 5000);
+  }
+
+  // Helper to read file natively as Base64 Data URI
+  function readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target.result);
+      reader.onerror = (e) => reject(e);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Handle Folder selection
+  folderUpload.addEventListener('change', async (event) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    try {
+      showFolderStatus('Processing...', false);
+
+      // Fetch all local storage keys to check if icons already exist
+      const allData = await browser.storage.local.get(null);
+      const newIcons = {};
+
+      let totalProcessed = 0;
+      let added = 0;
+      let existed = 0;
+      let hasUpdates = false;
+
+      const validExtensions = ['png', 'jpg', 'jpeg', 'ico', 'gif', 'svg'];
+
+      for (const file of files) {
+        // webkitRelativePath format is "SelectedFolderName/filename.png"
+        const pathParts = file.webkitRelativePath.split('/');
+
+        // Ignore files inside subfolders
+        if (pathParts.length > 2) continue;
+
+        const filename = file.name;
+
+        // Match extension
+        const extMatch = filename.match(/\.([a-zA-Z0-9]+)$/);
+        if (!extMatch) continue;
+
+        const ext = extMatch[1].toLowerCase();
+        if (!validExtensions.includes(ext)) continue;
+
+        // Strip the extension to get the domain
+        const domain = filename.replace(/\.[^/.]+$/, '');
+        if (!domain) continue;
+
+        totalProcessed++;
+        const storageKey = `favicon_${domain}`;
+
+        // Check against the flattened keys
+        if (allData[storageKey]) {
+          existed++;
+        } else {
+          added++;
+        }
+
+        // Convert the file directly to a Base64 Data URI
+        const dataUri = await readFileAsDataURL(file);
+
+        // Stage the flattened key for saving
+        newIcons[storageKey] = { data: dataUri, count: 1 };
+        hasUpdates = true;
+      }
+
+      if (hasUpdates) {
+        // Write the flattened keys directly to the root of local storage
+        await browser.storage.local.set(newIcons);
+      }
+
+      const report = `Processed ${totalProcessed} files: ${added} new added, ${existed} updated/existed.`;
+      logDebug(`[Folder Import] ${report}`);
+      showFolderStatus('Import complete!', false);
+
+      if (showNotifications.checked) {
+        await browser.notifications.create({
+          type: 'basic',
+          title: 'Favicon Import Complete',
+          message: report,
+        });
+      }
+    } catch (err) {
+      console.error('Folder processing error:', err);
+      showFolderStatus(`Error: ${err.message}`, true);
+    } finally {
+      folderUpload.value = ''; // Reset input to allow re-selection
+    }
+  });
 
   // Save settings
   saveButton.addEventListener('click', async () => {

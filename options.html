@@ -301,19 +301,35 @@ accounts.google.com, Gmail, YouTube"
         <span>Random icon</span>
       </label>
     </div>
-
     <p>
-      <input type="checkbox" id="showNotifications" />
-      Show notifications &nbsp;&nbsp;
-      <input type="checkbox" id="saveVisitedFavicons" />
-      Save favicons of visited sites &nbsp;&nbsp;
+      <label>
+        <input type="checkbox" id="showNotifications" />
+        Show notifications
+      </label>
     </p>
     <p>
-      <input type="checkbox" id="debugLogging" />
-      Enable debug logging
+      <label>
+        <input type="checkbox" id="saveVisitedFavicons" />
+        Save favicons of visited sites
+      </label>
     </p>
-
+    <p>
+      <label>
+        <input type="checkbox" id="debugLogging" />
+        Enable debug logging
+      </label>
+    </p>
     <button id="saveButton">Save</button>
     <span id="save-message" class="save-message">Settings saved!</span>
+
+    <h3>Import Favicons</h3>
+    <p>
+      Select a folder containing favicon images. Files must be placed directly in the root of the folder (subfolders are
+      ignored) and named by their domain (e.g., <code>youtube.com.png</code>).
+    </p>
+    <p>
+      <input type="file" id="folderUpload" webkitdirectory />
+      <span id="folder-message" class="save-message"></span>
+    </p>
   </body>
 </html>
