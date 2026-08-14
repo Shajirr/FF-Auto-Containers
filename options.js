@@ -16,6 +16,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const showNotifications = document.getElementById('showNotifications');
   const debugLogging = document.getElementById('debugLogging');
   const saveVisitedFaviconsCheckbox = document.getElementById('saveVisitedFavicons');
+  const unmatchedTemp = document.getElementById('unmatchedTemp');
+  const unmatchedDefault = document.getElementById('unmatchedDefault');
   const saveButton = document.getElementById('saveButton');
   const saveMessage = document.getElementById('save-message');
   const totalContainersEl = document.getElementById('totalContainers');
@@ -82,12 +84,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     notifications = true,
     isRecordingHops = false,
     saveVisitedFavicons = false,
+    defaultToNoContainer = false,
   } = await browser.storage.local.get([
     'rules',
     'overrideRules',
     'notifications',
     'isRecordingHops',
     'saveVisitedFavicons',
+    'defaultToNoContainer',
   ]);
 
   // Load default temp container style
@@ -209,6 +213,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   showNotifications.checked = notifications;
   debugLogging.checked = DEBUG;
   saveVisitedFaviconsCheckbox.checked = saveVisitedFavicons;
+  unmatchedTemp.checked = !defaultToNoContainer;
+  unmatchedDefault.checked = defaultToNoContainer;
 
   // Listen for storage changes to update the UI
   browser.storage.onChanged.addListener(async (changes, namespace) => {
@@ -227,6 +233,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       if (changes.saveVisitedFavicons) {
         saveVisitedFaviconsCheckbox.checked = changes.saveVisitedFavicons.newValue ?? false;
+      }
+      if (changes.defaultToNoContainer) {
+        const noContainer = changes.defaultToNoContainer.newValue ?? false;
+        unmatchedTemp.checked = !noContainer;
+        unmatchedDefault.checked = noContainer;
       }
     }
   });
@@ -501,6 +512,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         notifications: showNotifications.checked,
         DEBUG: debugLogging.checked,
         saveVisitedFavicons: saveVisitedFaviconsCheckbox.checked,
+        defaultToNoContainer: unmatchedDefault.checked,
         tempContainerStyle: {
           color: randomColorCheckbox.checked ? null : selectedColor,
           icon: randomIconCheckbox.checked ? null : selectedIcon,

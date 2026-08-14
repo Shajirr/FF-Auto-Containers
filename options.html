@@ -231,6 +231,23 @@ google.com, GL"
       ></textarea>
     </p>
 
+    <h3>Unmatched Domains</h3>
+    <p>
+      Choose what happens when a domain does not match any rule.<br />
+      <label style="display: block; margin: 6px 0">
+        <input type="radio" name="unmatchedBehavior" value="temp" id="unmatchedTemp" checked />
+        Open in a temporary container (isolate each new domain)
+      </label>
+      <label style="display: block; margin: 6px 0">
+        <input type="radio" name="unmatchedBehavior" value="default" id="unmatchedDefault" />
+        Open in the default container (No Container)
+      </label>
+      <br />
+      When "No Container" is selected, domains without a rule are not isolated. Tabs that were
+      explicitly opened in a container (e.g. via Firefox's "Open Link in New Container") are always
+      left in that container, and tabs already in a permanent container are never moved automatically.
+    </p>
+
     <h3>Override Rules</h3>
     <p>
       Enter override rules that allow tabs to say in their current container on domain change.<br />
