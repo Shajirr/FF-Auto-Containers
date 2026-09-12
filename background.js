@@ -273,17 +273,17 @@ async function inheritExclusion(newTabId, sourceTabId) {
 // Listen for storage changes
 browser.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'local') {
-    if (changes.DEBUG) {
-      DEBUG = changes.DEBUG.newValue ?? false;
-      logDebug('Auto Containers: Debug mode changed to:', DEBUG);
+    if (changes.debugMode !== undefined) {
+      DEBUG = changes.debugMode.newValue ?? false;
+      logDebug('Debug mode changed to:', DEBUG);
     }
     if (changes.isRecordingHops) {
       isRecordingHops = changes.isRecordingHops.newValue ?? false;
-      logDebug('Auto Containers: Hop tracking changed to:', isRecordingHops);
+      logDebug('Hop tracking changed to:', isRecordingHops);
     }
     if (changes.saveVisitedFavicons) {
       saveVisitedFavicons = changes.saveVisitedFavicons.newValue ?? false;
-      logDebug('Auto Containers: Save visited favicons changed to:', saveVisitedFavicons);
+      logDebug('Save visited favicons changed to:', saveVisitedFavicons);
     }
   }
 });
@@ -769,6 +769,9 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
           if (targetContainerId && tab.cookieStoreId !== targetContainerId) {
             shouldReplace = true;
             reason = `session restore mismatch: tab is in ${tab.cookieStoreId} but rule requires ${targetContainerId}`;
+          } else if (!targetContainerId && !isTempContainer) {
+            shouldReplace = true;
+            reason = `session restore in permanent container ${tab.cookieStoreId} with no rule: isolating in temp container`;
           } else {
             logDebug(`Session restore for ${newDomain}: keeping current container ${tab.cookieStoreId}`);
           }
@@ -791,6 +794,10 @@ async function handleContainerChangeOnNavigation(tabId, newUrl) {
         // (e.g. user manually moved tab or rule was updated)
         shouldReplace = true;
         reason = `same domain but wrong container: ${tab.cookieStoreId} -> ${targetContainerId}`;
+      } else if (!targetContainerId && !isTempContainer) {
+        // Case 5: Same domain navigation, but unassigned domain is in a permanent container
+        shouldReplace = true;
+        reason = `domain ${newDomain} has no rule but is in permanent container ${tab.cookieStoreId}: isolating in temp container`;
       }
     }
 
@@ -963,7 +970,7 @@ browser.runtime.onMessage.addListener(async (message) => {
 
       const { rules = '', overrideRules = '' } = await browser.storage.local.get(['rules', 'overrideRules']);
       const sortedRules = sortRules(rules);
-      const sortedOverrides = sortRules(overrideRules);
+      const sortedOverrides = sortRules(overrideRules, true);
 
       // Object to hold any changed rules
       const updates = {};
@@ -1003,16 +1010,18 @@ browser.runtime.onMessage.addListener(async (message) => {
   logDebug('Auto Containers background script loaded');
 
   const result = await browser.storage.local.get({
-    DEBUG: false,
+    debugMode: false,
     isRecordingHops: false,
     saveVisitedFavicons: false,
   });
-  DEBUG = result.DEBUG;
+  DEBUG = result.debugMode;
   isRecordingHops = result.isRecordingHops;
   saveVisitedFavicons = result.saveVisitedFavicons;
-  logDebug('Auto Containers: Debug mode set to:', DEBUG);
-  logDebug('Auto Containers: Hop tracking set to:', isRecordingHops);
-  logDebug('Auto Containers: Save visited favicons set to:', saveVisitedFavicons);
+
+  logDebug('Auto Containers background script loaded');
+  logDebug('Debug mode set to:', DEBUG);
+  logDebug('Hop tracking set to:', isRecordingHops);
+  logDebug('Save visited favicons set to:', saveVisitedFavicons);
 
   // Create main context menu with submenu
   browser.contextMenus.create({

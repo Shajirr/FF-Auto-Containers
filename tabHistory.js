@@ -1,7 +1,7 @@
 export { synchronizedUpdateHistory, getTabHistory, clearTabHistory, setTabHistory };
 
 let DEBUG = false;
-const debugPrefix = '[AC][History]';
+const debugPrefix = '[AC] [History]';
 
 function logDebug(...args) {
   if (DEBUG) console.log(debugPrefix, ...args);

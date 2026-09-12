@@ -5,6 +5,11 @@ function logDebug(...args) {
   if (DEBUG) console.log(debugPrefix, ...args);
 }
 
+// Sync debug setting from storage on initialization
+browser.storage.local.get({ debugMode: false }).then((result) => {
+  DEBUG = result.debugMode;
+});
+
 // In-memory set to track which domains are cached without querying storage
 let cachedDomains = null;
 // Promise to ensure only one initialization of cachedDomains occurs at a time
@@ -73,7 +78,7 @@ async function purgeLeastUsedIcons() {
 
     // Calculate 2/3 of items to delete
     const deleteCount = Math.floor(entries.length * (2 / 3));
-    const entriesToDelete = entries.slice(0, deleteCount).map(e => e.key);
+    const entriesToDelete = entries.slice(0, deleteCount).map((e) => e.key);
 
     await browser.storage.local.remove(entriesToDelete);
 
@@ -126,6 +131,8 @@ async function fetchTopSitesFavicons() {
       }
     });
 
+    logDebug(`Prepared ${Object.keys(newIcons).length} new favicon entries from topSites.`);
+
     // Save the new timestamp, and the cache if it was updated
     await browser.storage.local.set({
       lastTopSitesFetch: now,
@@ -171,9 +178,11 @@ export async function fetchFavicon(urlOrDomain) {
 
         // Update count asynchronously directly to the isolated key
         if (typeof cachedItem === 'object') {
-          browser.storage.local.set({
-            [storageKey]: { ...cachedItem, count: (cachedItem.count || 0) + 1 }
-          }).catch(() => {});
+          browser.storage.local
+            .set({
+              [storageKey]: { ...cachedItem, count: (cachedItem.count || 0) + 1 },
+            })
+            .catch(() => {});
         }
         return data || null;
       }
@@ -209,8 +218,8 @@ export async function fetchFavicon(urlOrDomain) {
  * @param {string} favIconUrl - The favicon URL provided by the tab.
  */
 export async function recordFaviconFromTab(tabUrl, favIconUrl) {
-    // Only process valid URLS / standard web pages
-    if (!tabUrl || !favIconUrl || !tabUrl.startsWith('http')) return;
+  // Only process valid URLS / standard web pages
+  if (!tabUrl || !favIconUrl || !tabUrl.startsWith('http')) return;
 
   const domain = extractDomain(tabUrl);
   // Do not record internal or extension favicons, or if the domain is invalid
@@ -230,7 +239,7 @@ export async function recordFaviconFromTab(tabUrl, favIconUrl) {
     await initCachedDomains();
   }
 
-  // Instant in-memory check without touching browser.storage
+  // Instant in-memory check without querying browser.storage
   if (cachedDomains.has(domain)) {
     // Already cached
     logDebug(`Favicon already cached for domain: ${domain}`);
@@ -280,6 +289,10 @@ initCachedDomains();
 // Listen for new flattened favicon keys added by Options page operations
 browser.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'local') {
+    if (changes.debugMode !== undefined) {
+      DEBUG = changes.debugMode.newValue ?? false;
+    }
+
     let indexUpdated = false;
 
     for (const [key, change] of Object.entries(changes)) {

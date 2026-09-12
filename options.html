@@ -35,10 +35,13 @@
         opacity: 0;
         transition: opacity 0.5s ease-in-out;
       }
+
       .save-message.visible {
         opacity: 1;
       }
-
+      .save-message.error {
+        color: #d70022;
+      }
       /* ---------- Temp-container style UI ---------- */
 
       .style-controls {
@@ -140,9 +143,11 @@
           background-color: #cecece;
           filter: invert(1);
         }
-
         .icon-option.selected {
           background-color: AccentColor;
+        }
+        .save-message.error {
+          color: #ff848b;
         }
       }
 
@@ -173,8 +178,35 @@
         box-sizing: border-box;
         overflow-x: hidden;
       }
+
+      #auto-save-error {
+        color: #d70022; /* Firefox Red */
+        font-weight: bold;
+        font-size: 13px;
+        max-height: 0;
+        margin-top: 0;
+        opacity: 0;
+        overflow: hidden;
+        transition:
+          max-height 0.25s ease-out,
+          margin-top 0.25s ease-out,
+          opacity 0.25s ease-out;
+      }
+
+      #auto-save-error.visible {
+        max-height: 60px;
+        margin-top: 8px;
+        margin-bottom: 8px;
+        opacity: 1;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        #auto-save-error {
+          color: #ff848b; /* Lighter red for dark mode */
+        }
+      }
     </style>
-    <script src="options.js" defer></script>
+    <script type="module" src="options.js" defer></script>
   </head>
   <body>
     <h3>Container Counts</h3>
@@ -303,33 +335,48 @@ accounts.google.com, Gmail, YouTube"
     </div>
     <p>
       <label>
-        <input type="checkbox" id="showNotifications" />
+        <input type="checkbox" data-setting="showNotifications" />
         Show notifications
       </label>
     </p>
     <p>
       <label>
-        <input type="checkbox" id="saveVisitedFavicons" />
+        <input type="checkbox" data-setting="saveVisitedFavicons" />
         Save favicons of visited sites
+        <span
+          title="Fetches the favicon for the visited website, using the favIconUrl provided by it's tab. Might need a network request to the site depending on which favIconUrl was provided."
+          style="margin-left: 4px; cursor: help"
+          >ⓘ
+        </span>
       </label>
     </p>
     <p>
       <label>
-        <input type="checkbox" id="debugLogging" />
+        <input type="checkbox" data-setting="debugMode" />
         Enable debug logging
       </label>
     </p>
+
+    <div id="auto-save-error"></div>
+
     <button id="saveButton">Save</button>
     <span id="save-message" class="save-message">Settings saved!</span>
-
-    <h3>Import Favicons</h3>
-    <p>
-      Select a folder containing favicon images. Files must be placed directly in the root of the folder (subfolders are
-      ignored) and named by their domain (e.g., <code>youtube.com.png</code>).
-    </p>
-    <p>
-      <input type="file" id="folderUpload" webkitdirectory />
-      <span id="folder-message" class="save-message"></span>
-    </p>
+    <br />
+    <details>
+      <summary>Import Favicons</summary>
+      <p>
+        Select a folder containing favicon images:
+        <ul>
+          <li><strong>Location:</strong> Files must be placed directly in the root of the selected folder (subfolders are ignored)</li>
+          <li><strong>Naming:</strong> Name files after their domain (e.g., <code>youtube.com.png</code>, <code>github.com.ico</code>)</li>
+          <li><strong>Formats:</strong> PNG, JPG, JPEG, ICO, GIF, or SVG</li>
+          <li><strong>Size limit:</strong> Maximum 100 KB per icon</li>
+        </ul>
+      </p>
+      <p>
+        <input type="file" id="folderUpload" webkitdirectory />
+        <span id="folder-message" class="save-message"></span>
+      </p>
+    </details>
   </body>
 </html>

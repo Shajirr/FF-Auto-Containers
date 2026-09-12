@@ -1,4 +1,4 @@
-export { sortRules, extractBaseDomain };
+export { sortRules, extractBaseDomain, deduplicateRules, mergeOverrideRules };
 
 let DEBUG = false;
 const debugPrefix = '[AC]';
@@ -6,6 +6,20 @@ const debugPrefix = '[AC]';
 function logDebug(...args) {
   if (DEBUG) console.log(debugPrefix, ...args);
 }
+
+// Sync debug setting from storage on initialization
+browser.storage.local.get({ debugMode: false }).then((result) => {
+  DEBUG = result.debugMode;
+});
+
+// Listen for storage changes
+browser.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === 'local') {
+    if (changes.debugMode !== undefined) {
+      DEBUG = changes.debugMode.newValue ?? false;
+    }
+  }
+});
 
 // Helper function to extract base domain for grouping
 function extractBaseDomain(domain) {
@@ -248,10 +262,11 @@ function sortUrlPatternsInGroup(patterns) {
 }
 
 // Function to sort rules by domain and specificity
-function sortRules(rulesText) {
+function sortRules(rulesText, isOverride = false) {
   try {
-    const lines = rulesText.split('\n').filter((line) => line.trim() !== '');
-    if (lines.length === 0) return rulesText;
+    const cleanedText = isOverride ? mergeOverrideRules(rulesText) : deduplicateRules(rulesText);
+    const lines = cleanedText.split('\n').filter((line) => line.trim() !== '');
+    if (lines.length === 0) return cleanedText;
     logDebug(`Sorting ${lines.length} rules`);
 
     // Validate all rules first
@@ -345,10 +360,12 @@ function sortRules(rulesText) {
 
       // Reorder the group based on the sorted patterns
       const sortedGroup = [];
+      const remainingGroup = [...group];
       sortedPatterns.forEach((pattern) => {
-        const rule = group.find((r) => r.pattern === pattern);
-        if (rule) {
-          sortedGroup.push(rule);
+        const ruleIndex = remainingGroup.findIndex((r) => r.pattern === pattern);
+        if (ruleIndex !== -1) {
+          sortedGroup.push(remainingGroup[ruleIndex]);
+          remainingGroup.splice(ruleIndex, 1);
         }
       });
 
@@ -373,4 +390,86 @@ function sortRules(rulesText) {
     console.error('Error sorting rules:', error);
     return rulesText; // Return original rules if sorting fails
   }
+}
+
+// Drop exact duplicate rules
+function deduplicateRules(text) {
+  if (!text) return '';
+  const lines = text.split('\n');
+  const seen = new Set();
+  const result = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const commaIndex = trimmed.indexOf(',');
+    if (commaIndex === -1) {
+      if (!seen.has(trimmed)) {
+        seen.add(trimmed);
+        result.push(trimmed);
+      }
+      continue;
+    }
+
+    const pattern = trimmed.slice(0, commaIndex).trim();
+    const container = trimmed.slice(commaIndex + 1).trim();
+    if (!pattern || !container) continue;
+
+    const normalized = `${pattern}, ${container}`;
+    const key = `${pattern.toLowerCase()}, ${container}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(normalized);
+    }
+  }
+
+  return result.join('\n');
+}
+
+// Merge override rules with the same base pattern and deduplicate container additions
+function mergeOverrideRules(text) {
+  if (!text) return '';
+  const lines = text.split('\n');
+  const ruleMap = new Map();
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const commaIndex = trimmed.indexOf(',');
+    if (commaIndex === -1) continue;
+
+    const pattern = trimmed.slice(0, commaIndex).trim();
+    const containersPart = trimmed.slice(commaIndex + 1);
+    const containers = containersPart
+      .split(',')
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0);
+
+    if (!pattern || containers.length === 0) continue;
+
+    const patternKey = pattern.toLowerCase();
+    if (!ruleMap.has(patternKey)) {
+      ruleMap.set(patternKey, {
+        pattern,
+        containers: [],
+        containerSet: new Set(),
+      });
+    }
+
+    const entry = ruleMap.get(patternKey);
+    for (const container of containers) {
+      if (!entry.containerSet.has(container)) {
+        entry.containerSet.add(container);
+        entry.containers.push(container);
+      }
+    }
+  }
+
+  const mergedLines = [];
+  for (const { pattern, containers } of ruleMap.values()) {
+    mergedLines.push(`${pattern}, ${containers.join(', ')}`);
+  }
+  return mergedLines.join('\n');
 }
